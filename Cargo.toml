@@ -1,0 +1,18 @@
+[package]
+name = "keyhammer"
+version = "0.1.0"
+edition = "2024"
+description = "Sublinear fuzzy string search with typo probability scoring"
+license = "MIT"
+repository = "https://github.com/Keyhammer/Keyhammer"
+keywords = ["fuzzy", "search", "hamming", "autocomplete", "typo"]
+categories = ["algorithms", "text-processing"]
+
+[dependencies]
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "search"
+harness = false

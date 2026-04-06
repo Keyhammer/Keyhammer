@@ -1,0 +1,12 @@
+{
+  "name": "keyhammer",
+  "version": "0.1.0",
+  "main": "index.js",
+  "napi": {
+    "name": "keyhammer",
+    "triples": {}
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3"
+  }
+}
