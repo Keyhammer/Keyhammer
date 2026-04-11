@@ -38,9 +38,13 @@ mod variants;
 mod columnar;
 mod fingerprint;
 mod encoding;
+mod normalize;
+mod query;
 mod index;
+mod document;
 
 pub use error::{Error, Result};
 pub use index::{FuzzyIndex, SearchResult, IndexStats};
 pub use scorer::KeyboardLayout;
 pub use encoding::TypoEncoding;
+pub use document::{DocumentIndex, DocumentIndexBuilder, DocSearchResult, FieldMatch};

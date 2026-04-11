@@ -3,6 +3,10 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const { KeyhammerIndex } = require("../crates/node/keyhammer.node");
 
+// ─── Config ────────────────────────────────────────────────────────────────
+
+const SIZES = [1000, 5000, 10000];
+
 const WORDS = [
   "abstract", "algorithm", "allocate", "analyze", "application", "architecture",
   "argument", "array", "assert", "async", "attribute", "authenticate", "authorize",
@@ -61,161 +65,208 @@ const WORDS = [
   "warning", "webhook", "widget", "window", "worker", "wrapper", "yield",
 ];
 
-const TYPOS = [
-  "javasript",   // deletion
-  "javsacript",  // transposition
-  "javasccript",  // insertion
-  "javoscript",  // substitution
-  "typscript",   // deletion
-  "pythn",       // deletion
-  "algortihm",   // transposition
-  "benchmerk",   // substitution
-  "framewrok",   // transposition
-  "databaes",    // transposition
-];
+// ─── Helpers ───────────────────────────────────────────────────────────────
 
 function scaleWords(base, target) {
   const words = [];
   for (let i = 0; i < target; i++) {
-    if (i < base.length) words.push(base[i]);
-    else words.push(base[i % base.length] + i);
+    words.push(i < base.length ? base[i] : base[i % base.length] + i);
   }
   return words;
 }
 
-function bench(name, fn, iterations = 1000) {
-  // warmup
-  const warmup = Math.min(iterations, 20);
-  for (let i = 0; i < warmup; i++) fn();
-
-  const start = performance.now();
-  for (let i = 0; i < iterations; i++) fn();
-  const elapsed = performance.now() - start;
-
-  const perOp = (elapsed / iterations) * 1000; // microseconds
-  return { name, totalMs: elapsed.toFixed(2), perOpUs: perOp.toFixed(2), iterations };
-}
-
-// scale iterations down for larger datasets
-function iters(base, numTerms) {
-  if (numTerms >= 50000) return Math.max(5, Math.floor(base / 100));
-  if (numTerms >= 20000) return Math.max(10, Math.floor(base / 50));
-  if (numTerms >= 10000) return Math.max(20, Math.floor(base / 20));
-  if (numTerms >= 5000) return Math.max(50, Math.floor(base / 10));
+function iters(base, n) {
+  if (n >= 10000) return Math.max(10, Math.floor(base / 20));
+  if (n >= 5000) return Math.max(20, Math.floor(base / 10));
   return base;
 }
 
-function runSuite(label, terms) {
-  console.log(`\n${"=".repeat(60)}`);
-  console.log(`  ${label} (${terms.length} terms)`);
-  console.log(`${"=".repeat(60)}`);
+function bench(name, fn, iterations) {
+  for (let i = 0; i < Math.min(iterations, 10); i++) fn(); // warmup
+  const start = performance.now();
+  for (let i = 0; i < iterations; i++) fn();
+  const elapsed = performance.now() - start;
+  return (elapsed / iterations) * 1000; // µs per op
+}
 
-  const n = terms.length;
+function fmt(us) {
+  if (us >= 1000) return `${(us / 1000).toFixed(2)}ms`;
+  return `${us.toFixed(2)}µs`;
+}
 
-  // --- Build ---
-  const fuseBuild = bench("fuse.js build", () => {
-    new Fuse(terms, { keys: [""], threshold: 0.4, distance: 100, includeScore: true });
-  }, iters(100, n));
+function speedup(fuse, kh) {
+  return (fuse / kh).toFixed(1);
+}
 
-  const khBuild = bench("keyhammer build", () => {
+// ─── Typos ─────────────────────────────────────────────────────────────────
+
+const TYPOS = {
+  substitution: { query: "javoscript", expect: "javascript" },
+  transposition: { query: "javsacript", expect: "javascript" },
+  deletion: { query: "javasript", expect: "javascript" },
+  insertion: { query: "javasccript", expect: "javascript" },
+  adjacent_key: { query: "javadcript", expect: "javascript" },
+  case_mixed: { query: "JAVASCRIPT", expect: "javascript" },
+  short: { query: "pythn", expect: "python" },
+  double_error: { query: "javscritp", expect: "javascript" },
+  prefix_typo: { query: "xavascript", expect: "javascript" },
+  suffix_typo: { query: "javascrip", expect: "javascript" },
+};
+
+const BATCH_QUERIES = [
+  "javasript", "typscript", "pythn", "ruts", "golanf",
+  "algortihm", "benchmerk", "framewrok", "databaes", "javscript",
+];
+
+// ─── Run ───────────────────────────────────────────────────────────────────
+
+console.log("\n  KEYHAMMER vs FUSE.JS — COMPLETE BENCHMARK");
+console.log("  Same terms, same queries, same process.\n");
+
+for (const size of SIZES) {
+  const terms = scaleWords(WORDS, size);
+
+  console.log(`${"═".repeat(70)}`);
+  console.log(`  ${size.toLocaleString()} TERMS`);
+  console.log(`${"═".repeat(70)}`);
+
+  // ── Build ──────────────────────────────────────────────────────────
+
+  const fuseBuild = bench("fuse build", () => {
+    new Fuse(terms, { threshold: 0.4, distance: 100, includeScore: true });
+  }, iters(100, size));
+
+  const khBuild = bench("kh build", () => {
     KeyhammerIndex.build(terms, 2);
-  }, iters(100, n));
+  }, iters(100, size));
 
-  console.log(`\n  Build:`);
-  console.log(`    fuse.js:    ${fuseBuild.perOpUs} µs`);
-  console.log(`    keyhammer:  ${khBuild.perOpUs} µs`);
+  console.log(`\n  BUILD`);
+  console.log(`    FuseJS:     ${fmt(fuseBuild)}`);
+  console.log(`    keyhammer:  ${fmt(khBuild)}`);
+  console.log(`    ratio:      ${(khBuild / fuseBuild).toFixed(1)}x`);
 
-  // --- Setup for search ---
+  // ── Setup ──────────────────────────────────────────────────────────
+
   const fuse = new Fuse(terms, {
-    keys: [""],
     threshold: 0.4,
     distance: 100,
     includeScore: true,
-  });
-  // fuse on plain strings needs a different setup
-  const fuseSimple = new Fuse(terms, {
-    threshold: 0.4,
-    distance: 100,
-    includeScore: true,
+    includeMatches: true,
   });
   const kh = KeyhammerIndex.build(terms, 2);
 
-  // --- Single query ---
-  const fuseSingle = bench("fuse.js search 'javasript'", () => {
-    fuseSimple.search("javasript");
-  }, iters(1000, n));
+  // ── Single query by typo type ──────────────────────────────────────
 
-  const khSingle = bench("keyhammer search 'javasript'", () => {
-    kh.search("javasript", 5);
-  }, iters(1000, n));
+  console.log(`\n  SINGLE QUERY (by typo type)`);
+  console.log(`    ${"type".padEnd(16)} ${"FuseJS".padEnd(12)} ${"keyhammer".padEnd(12)} speedup  both_find`);
+  console.log(`    ${"─".repeat(62)}`);
 
-  console.log(`\n  Single query ("javasript"):`);
-  console.log(`    fuse.js:    ${fuseSingle.perOpUs} µs`);
-  console.log(`    keyhammer:  ${khSingle.perOpUs} µs`);
-  console.log(`    speedup:    ${(parseFloat(fuseSingle.perOpUs) / parseFloat(khSingle.perOpUs)).toFixed(1)}x`);
+  for (const [type, { query, expect }] of Object.entries(TYPOS)) {
+    const it = iters(500, size);
 
-  // --- 10 typo queries ---
-  const fuse10 = bench("fuse.js 10 typos", () => {
-    for (const t of TYPOS) fuseSimple.search(t);
-  }, iters(500, n));
+    const fuseTime = bench("f", () => fuse.search(query), it);
+    const khTime = bench("k", () => kh.search(query, 5), it);
 
-  const kh10 = bench("keyhammer 10 typos", () => {
-    for (const t of TYPOS) kh.search(t, 5);
-  }, iters(500, n));
+    const fuseFound = fuse.search(query).some(r => r.item.toLowerCase() === expect);
+    const khFound = kh.search(query, 5).some(r => r.term.toLowerCase() === expect);
+    const both = fuseFound && khFound ? "✓✓" : fuseFound ? "F" : khFound ? "K" : "✗✗";
 
-  console.log(`\n  10 typo queries:`);
-  console.log(`    fuse.js:    ${fuse10.perOpUs} µs  (${(parseFloat(fuse10.perOpUs) / 10).toFixed(2)} µs/query)`);
-  console.log(`    keyhammer:  ${kh10.perOpUs} µs  (${(parseFloat(kh10.perOpUs) / 10).toFixed(2)} µs/query)`);
-  console.log(`    speedup:    ${(parseFloat(fuse10.perOpUs) / parseFloat(kh10.perOpUs)).toFixed(1)}x`);
+    console.log(`    ${type.padEnd(16)} ${fmt(fuseTime).padEnd(12)} ${fmt(khTime).padEnd(12)} ${speedup(fuseTime, khTime).padStart(6)}x  ${both}`);
+  }
 
-  // --- Throughput: 100 queries ---
-  const queries100 = [];
-  for (let i = 0; i < 100; i++) queries100.push(TYPOS[i % TYPOS.length]);
+  // ── Batch: 10 queries ──────────────────────────────────────────────
 
-  const fuseThroughput = bench("fuse.js 100 queries", () => {
-    for (const q of queries100) fuseSimple.search(q);
-  }, iters(100, n));
+  console.log(`\n  BATCH (10 queries)`);
 
-  const khThroughput = bench("keyhammer 100 queries", () => {
+  const fuseBatch = bench("f", () => {
+    for (const q of BATCH_QUERIES) fuse.search(q);
+  }, iters(200, size));
+
+  const khBatch = bench("k", () => {
+    for (const q of BATCH_QUERIES) kh.search(q, 5);
+  }, iters(200, size));
+
+  console.log(`    FuseJS:     ${fmt(fuseBatch)}  (${fmt(fuseBatch / 10)}/query)`);
+  console.log(`    keyhammer:  ${fmt(khBatch)}  (${fmt(khBatch / 10)}/query)`);
+  console.log(`    speedup:    ${speedup(fuseBatch, khBatch)}x`);
+
+  // ── Throughput: 100 queries ────────────────────────────────────────
+
+  const queries100 = BATCH_QUERIES.flatMap(q => Array(10).fill(q));
+
+  const fuseTp = bench("f", () => {
+    for (const q of queries100) fuse.search(q);
+  }, iters(50, size));
+
+  const khTp = bench("k", () => {
     for (const q of queries100) kh.search(q, 5);
-  }, iters(100, n));
+  }, iters(50, size));
 
-  const fuseQps = Math.round(100 / (parseFloat(fuseThroughput.perOpUs) / 1e6));
-  const khQps = Math.round(100 / (parseFloat(khThroughput.perOpUs) / 1e6));
+  const fuseQps = Math.round(100 / (fuseTp / 1e6));
+  const khQps = Math.round(100 / (khTp / 1e6));
 
-  console.log(`\n  Throughput (100 queries):`);
-  console.log(`    fuse.js:    ${fuseQps.toLocaleString()} queries/sec`);
-  console.log(`    keyhammer:  ${khQps.toLocaleString()} queries/sec`);
-  console.log(`    speedup:    ${(khQps / fuseQps).toFixed(1)}x`);
+  console.log(`\n  THROUGHPUT (100 queries)`);
+  console.log(`    FuseJS:     ${fuseQps.toLocaleString()} q/s`);
+  console.log(`    keyhammer:  ${khQps.toLocaleString()} q/s`);
+  console.log(`    speedup:    ${speedup(khQps, fuseQps)}x`);
 
-  // --- Miss query ---
-  const fuseMiss = bench("fuse.js miss", () => {
-    fuseSimple.search("zzzzzzzzz");
-  }, iters(1000, n));
+  // ── Miss (no results) ──────────────────────────────────────────────
 
-  const khMiss = bench("keyhammer miss", () => {
-    kh.search("zzzzzzzzz", 5);
-  }, iters(1000, n));
+  const fuseMiss = bench("f", () => fuse.search("zzzzzzzzz"), iters(500, size));
+  const khMiss = bench("k", () => kh.search("zzzzzzzzz", 5), iters(500, size));
 
-  console.log(`\n  Miss ("zzzzzzzzz"):`);
-  console.log(`    fuse.js:    ${fuseMiss.perOpUs} µs`);
-  console.log(`    keyhammer:  ${khMiss.perOpUs} µs`);
-  console.log(`    speedup:    ${(parseFloat(fuseMiss.perOpUs) / parseFloat(khMiss.perOpUs)).toFixed(1)}x`);
+  console.log(`\n  MISS (no results)`);
+  console.log(`    FuseJS:     ${fmt(fuseMiss)}`);
+  console.log(`    keyhammer:  ${fmt(khMiss)}`);
+  console.log(`    speedup:    ${speedup(fuseMiss, khMiss)}x`);
 
-  // --- Results quality check ---
-  const fuseResults = fuseSimple.search("javasript").slice(0, 5).map(r => r.item);
-  const khResults = kh.search("javasript", 5).map(r => r.term);
-  console.log(`\n  Results for "javasript":`);
-  console.log(`    fuse.js:    [${fuseResults.join(", ")}]`);
-  console.log(`    keyhammer:  [${khResults.join(", ")}]`);
-}
+  // ── With highlighting ──────────────────────────────────────────────
 
-// ─── Run ────────────────────────────────────────────────────────────────────
+  const fuseHL = new Fuse(terms, {
+    threshold: 0.4, distance: 100, includeScore: true, includeMatches: true,
+  });
 
-console.log("\n  KEYHAMMER vs FUSE.JS BENCHMARK");
-console.log("  Same terms, same queries, same process.\n");
+  const fuseHLTime = bench("f", () => fuseHL.search("javasript"), iters(500, size));
+  const khHLTime = bench("k", () => {
+    const r = kh.search("javasript", 5);
+    r.forEach(x => x.matchRanges); // access ranges
+  }, iters(500, size));
 
-for (const size of [10000]) {
-  const terms = scaleWords(WORDS, size);
-  runSuite(`${size} terms`, terms);
+  console.log(`\n  WITH HIGHLIGHTING`);
+  console.log(`    FuseJS:     ${fmt(fuseHLTime)}`);
+  console.log(`    keyhammer:  ${fmt(khHLTime)}`);
+  console.log(`    speedup:    ${speedup(fuseHLTime, khHLTime)}x`);
+
+  // ── Threshold filtering ────────────────────────────────────────────
+
+  const fuseThresh = new Fuse(terms, { threshold: 0.2, includeScore: true });
+  const fuseThTime = bench("f", () => fuseThresh.search("javasript"), iters(500, size));
+  const khThTime = bench("k", () => kh.searchWithThreshold("javasript", 5, 0.8), iters(500, size));
+
+  console.log(`\n  WITH THRESHOLD`);
+  console.log(`    FuseJS (0.2):     ${fmt(fuseThTime)}`);
+  console.log(`    keyhammer (0.8):  ${fmt(khThTime)}`);
+  console.log(`    speedup:          ${speedup(fuseThTime, khThTime)}x`);
+
+  // ── Dynamic add ────────────────────────────────────────────────────
+
+  const khDyn = KeyhammerIndex.build(terms.slice(0, 100), 2);
+  const addTime = bench("k", () => {
+    khDyn.add("newterm");
+  }, 1000);
+  // fuse has no .add() that's equivalent — it rebuilds internally
+
+  console.log(`\n  DYNAMIC ADD`);
+  console.log(`    keyhammer add:  ${fmt(addTime)}/term`);
+  console.log(`    FuseJS:         no equivalent (must rebuild)`);
+
+  // ── Result quality ─────────────────────────────────────────────────
+
+  console.log(`\n  RESULT QUALITY ("javasript")`);
+  const fuseRes = fuse.search("javasript").slice(0, 5).map(r => r.item);
+  const khRes = kh.search("javasript", 5).map(r => r.term);
+  console.log(`    FuseJS:     [${fuseRes.join(", ")}]`);
+  console.log(`    keyhammer:  [${khRes.join(", ")}]`);
+
+  console.log();
 }

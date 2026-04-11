@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 /// Fiat-Naor function inversion (Section 4.3 of arXiv:2604.01307).
 ///
 /// Given f: [n] → [n], build a structure to compute f⁻¹(j) in O(σ³) time

@@ -317,6 +317,7 @@ fn hamming_bytes(a: &[u8], b: &[u8]) -> usize {
     d
 }
 
+#[allow(dead_code)]
 pub fn build_leaf_map(node: Option<&CglNode>) -> std::collections::HashMap<usize, usize> {
     let mut map = std::collections::HashMap::new();
     let mut counter = 0usize;
@@ -352,6 +353,7 @@ pub fn build_leaf_map(node: Option<&CglNode>) -> std::collections::HashMap<usize
     map
 }
 
+#[allow(dead_code)]
 pub fn node_count(node: Option<&CglNode>) -> usize {
     match node {
         None => 0,

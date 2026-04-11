@@ -4,18 +4,17 @@
 /// Build is fast (no variant generation), memory is low, queries use fingerprints
 /// as a cheap pre-filter before doing actual string comparison.
 
-use std::collections::HashSet;
+use std::sync::OnceLock;
 
 use crate::altered::AlteredString;
 use crate::encoding::TypoEncoding;
 use crate::error::{Error, Result};
 use crate::fingerprint::{self, Fingerprint};
-use crate::inverter::FunctionInverter;
 use crate::scorer::{KeyboardLayout, TypoScorer};
 use crate::tree;
 
-/// With lazy tree construction, the build is fast at any scale.
-/// The threshold determines when to switch from brute force to tree-based search.
+/// Threshold above which a lazy CGL tree is built alongside brute force.
+/// Below this, only brute force + fingerprint runs.
 const TREE_THRESHOLD: usize = 5_000;
 
 #[derive(Debug, Clone)]
@@ -24,25 +23,27 @@ pub struct SearchResult {
     pub term_index: usize,
     pub score: f32,
     pub hamming_distance: usize,
+    /// Character positions where query and term differ (for UI highlighting).
+    pub match_ranges: Vec<(usize, usize)>,
 }
 
 pub struct FuzzyIndex {
+    // ── built eagerly (cheap) ──
     terms: Vec<Vec<u8>>,
     terms_display: Vec<String>,
     term_lengths: Vec<usize>,
-    col_terms: crate::columnar::ColumnarTerms,
     fingerprints: Vec<Fingerprint>,
-    /// Pre-encoded terms using typo-optimal encoding (XOR+popcount comparison).
-    encoded_terms: Vec<Vec<u8>>,
-    encoding: TypoEncoding,
-    term_map: std::collections::HashMap<Vec<u8>, Vec<usize>>,
-    root: Option<tree::CglNode>,
-    inverter: Option<FunctionInverter>,
-    leaf_map: std::collections::HashMap<usize, usize>,
     scorer: TypoScorer,
+    encoding: TypoEncoding,
     k: usize,
-    sigma: usize,
-    use_tree: bool,
+
+    // ── built lazily on first search ──
+    col_terms: OnceLock<crate::columnar::ColumnarTerms>,
+    encoded_terms: OnceLock<Vec<Vec<u8>>>,
+    term_map: OnceLock<std::collections::HashMap<Vec<u8>, Vec<usize>>>,
+
+    // ── lazy CGL tree (built on first search if n >= threshold) ──
+    root: OnceLock<Option<tree::CglNode>>,
 }
 
 impl FuzzyIndex {
@@ -64,88 +65,87 @@ impl FuzzyIndex {
 
         let max_len = terms.iter().map(|t| t.len()).max().unwrap_or(0);
         let n = terms.len();
-        let scorer = TypoScorer::with_layout(max_len, layout);
-        // normalize to lowercase for case-insensitive matching
+
+        // ── eager: only the essentials ──
         let terms_owned: Vec<Vec<u8>> = terms.iter()
             .map(|t| t.as_bytes().iter().map(|b| b.to_ascii_lowercase()).collect())
             .collect();
-        // keep originals for display in results
         let terms_display: Vec<String> = terms.iter().map(|t| t.to_string()).collect();
         let term_lengths: Vec<usize> = terms_owned.iter().map(|t| t.len()).collect();
-
-        // fingerprints: 26 bytes per term, O(n) total
         let fingerprints: Vec<Fingerprint> = terms_owned.iter()
             .map(|t| fingerprint::compute(t))
             .collect();
-
-        // term map for O(1) exact lookup
-        let mut term_map: std::collections::HashMap<Vec<u8>, Vec<usize>> =
-            std::collections::HashMap::with_capacity(n);
-        for (i, term) in terms_owned.iter().enumerate() {
-            term_map.entry(term.clone()).or_default().push(i);
-        }
-
-        let col_terms = crate::columnar::ColumnarTerms::build(&terms_owned);
-
-        // typo-optimal encoding: remap chars so XOR+popcount = confusion distance
+        let scorer = TypoScorer::with_layout(max_len, layout);
         let encoding = TypoEncoding::from_layout(layout);
-        let encoded_terms: Vec<Vec<u8>> = terms_owned.iter()
-            .map(|t| encoding.encode_str(t))
-            .collect();
-
-        if n < TREE_THRESHOLD {
-            return Ok(Self {
-                terms: terms_owned,
-                terms_display,
-                term_lengths,
-                col_terms,
-                fingerprints,
-                encoded_terms,
-                encoding,
-                term_map,
-                root: None,
-                inverter: None,
-                leaf_map: std::collections::HashMap::new(),
-                scorer,
-                k,
-                sigma: 0,
-                use_tree: false,
-            });
-        }
-
-        let sigma = (((n as f64 + 1.0).log2() / k.max(1) as f64).ceil() as usize).max(2);
-
-        let altered: Vec<AlteredString> = terms.iter()
-            .enumerate()
-            .map(|(i, t)| AlteredString::new(t.as_bytes(), Some(i)))
-            .collect();
-
-        let root = tree::build(altered, k, sigma);
-        let leaf_map = tree::build_leaf_map(root.as_ref());
-
-        let leaf_map_clone = leaf_map.clone();
-        let f = move |i: usize| -> Option<usize> {
-            leaf_map_clone.get(&i).copied()
-        };
-        let inverter = FunctionInverter::build(n, sigma, &f);
 
         Ok(Self {
             terms: terms_owned,
             terms_display,
             term_lengths,
-            col_terms,
             fingerprints,
-            encoded_terms,
-            encoding,
-            term_map,
-            root,
-            inverter: Some(inverter),
-            leaf_map,
             scorer,
+            encoding,
             k,
-            sigma,
-            use_tree: true,
+            col_terms: OnceLock::new(),
+            encoded_terms: OnceLock::new(),
+            term_map: OnceLock::new(),
+            root: OnceLock::new(),
         })
+    }
+
+    // ── lazy accessors (built on first use) ──
+
+    fn col(&self) -> &crate::columnar::ColumnarTerms {
+        self.col_terms.get_or_init(|| crate::columnar::ColumnarTerms::build(&self.terms))
+    }
+
+    fn enc_terms(&self) -> &Vec<Vec<u8>> {
+        self.encoded_terms.get_or_init(|| {
+            self.terms.iter().map(|t| self.encoding.encode_str(t)).collect()
+        })
+    }
+
+    fn tree(&self) -> Option<&tree::CglNode> {
+        self.root.get_or_init(|| {
+            let n = self.terms.len();
+            if n < TREE_THRESHOLD { return None; }
+            let sigma = (((n as f64 + 1.0).log2() / self.k.max(1) as f64).ceil() as usize).max(2);
+            let altered: Vec<AlteredString> = self.terms.iter()
+                .enumerate()
+                .map(|(i, t)| AlteredString::new(t, Some(i)))
+                .collect();
+            tree::build(altered, self.k, sigma)
+        }).as_ref()
+    }
+
+    fn tmap(&self) -> &std::collections::HashMap<Vec<u8>, Vec<usize>> {
+        self.term_map.get_or_init(|| {
+            let mut m = std::collections::HashMap::with_capacity(self.terms.len());
+            for (i, term) in self.terms.iter().enumerate() {
+                m.entry(term.clone()).or_insert_with(Vec::new).push(i);
+            }
+            m
+        })
+    }
+
+    /// Search with a custom sort function.
+    pub fn search_with_sort(
+        &self,
+        query: &str,
+        max_results: usize,
+        sort_fn: impl FnMut(&SearchResult, &SearchResult) -> std::cmp::Ordering,
+    ) -> Result<Vec<SearchResult>> {
+        let mut results = self.search(query, max_results * 2)?; // get more, then re-sort
+        results.sort_unstable_by(sort_fn);
+        results.truncate(max_results);
+        Ok(results)
+    }
+
+    /// Search with a minimum score threshold. Results below `threshold` are discarded.
+    pub fn search_with_threshold(&self, query: &str, max_results: usize, threshold: f32) -> Result<Vec<SearchResult>> {
+        let mut results = self.search(query, max_results)?;
+        results.retain(|r| r.score >= threshold);
+        Ok(results)
     }
 
     pub fn search(&self, query: &str, max_results: usize) -> Result<Vec<SearchResult>> {
@@ -153,11 +153,19 @@ impl FuzzyIndex {
         let q = &q_lower;
         let q_encoded = self.encoding.encode_str(q);
 
-        let candidates = if self.use_tree {
-            self.search_tree(q)
-        } else {
-            self.search_brute(q)
-        };
+        // brute force always runs (fast for any n)
+        // tree supplements with additional candidates if available
+        let mut candidates = self.search_brute(q);
+        if let Some(root) = self.tree() {
+            let tree_matches = self.search_tree_node(root, q);
+            // merge tree candidates that brute force missed
+            let brute_set: std::collections::HashSet<usize> = candidates.iter().map(|&(i, _)| i).collect();
+            for (i, d) in tree_matches {
+                if !brute_set.contains(&i) {
+                    candidates.push((i, d));
+                }
+            }
+        }
 
         let mut seen_idx: Vec<bool> = vec![false; self.terms.len()];
         let mut results: Vec<SearchResult> = candidates.into_iter()
@@ -168,18 +176,21 @@ impl FuzzyIndex {
                 // 1. typo scorer (position weight + transposition + confusion matrix)
                 let typo_score = self.scorer.score(q, term);
                 // 2. encoding distance (bit-level confusion baked into representation)
-                let enc_dist = TypoEncoding::normalized_distance(&q_encoded, &self.encoded_terms[idx]);
+                let enc_dist = TypoEncoding::normalized_distance(&q_encoded, &self.enc_terms()[idx]);
                 // final score: blend both (encoding is a tiebreaker for similar typo scores)
+                // field-length normalization: shorter terms score slightly higher
+                let len_norm = 1.0 / (1.0 + (term.len() as f32 - q.len() as f32).abs() * 0.05);
                 let combined = if hd == 0 && q.len() == term.len() {
-                    1.0 // exact match
+                    1.0
                 } else {
-                    typo_score.score * 0.7 + (1.0 - enc_dist) * 0.3
+                    (typo_score.score * 0.7 + (1.0 - enc_dist) * 0.3) * len_norm
                 };
                 SearchResult {
                     term: self.terms_display[idx].clone(),
                     term_index: idx,
                     score: combined,
                     hamming_distance: hd,
+                    match_ranges: compute_match_ranges(q, term),
                 }
             })
             .collect();
@@ -211,8 +222,9 @@ impl FuzzyIndex {
                         results.push(SearchResult {
                             term: self.terms_display[idx].clone(),
                             term_index: idx,
-                            score: score * 0.8, // slightly lower than direct matches
+                            score: score * 0.8,
                             hamming_distance: self.k,
+                            match_ranges: compute_match_ranges(q, term),
                         });
                     }
                 }
@@ -237,7 +249,7 @@ impl FuzzyIndex {
         let mut results = Vec::with_capacity(16);
 
         // pass 1: columnar Hamming scan (substitutions + transpositions)
-        for (i, d) in self.col_terms.scan(q, k) {
+        for (i, d) in self.col().scan(q, k) {
             seen[i] = true;
             results.push((i, d));
         }
@@ -287,7 +299,7 @@ impl FuzzyIndex {
             buf.clear();
             buf.extend_from_slice(&q[..skip]);
             buf.extend_from_slice(&q[skip + 1..]);
-            if let Some(indices) = self.term_map.get(&buf) {
+            if let Some(indices) = self.tmap().get(&buf) {
                 for &idx in indices {
                     if !seen[idx] {
                         seen[idx] = true;
@@ -342,14 +354,15 @@ impl FuzzyIndex {
         true
     }
 
-    /// Quick bounded edit distance for combined error detection.
+    /// Bounded Damerau-Levenshtein distance (includes transposition as 1 op).
     #[inline]
     fn quick_edit_distance(&self, a: &[u8], b: &[u8], max_k: usize) -> usize {
         let m = a.len();
         let n = b.len();
         if m.abs_diff(n) > max_k { return max_k + 1; }
 
-        // simple bounded Levenshtein via 2-row DP
+        // Damerau-Levenshtein needs 3 rows: prev2, prev, curr
+        let mut prev2 = vec![0u16; n + 1];
         let mut prev = vec![0u16; n + 1];
         let mut curr = vec![0u16; n + 1];
         for j in 0..=n { prev[j] = j as u16; }
@@ -359,12 +372,18 @@ impl FuzzyIndex {
             let mut row_min = curr[0];
             for j in 1..=n {
                 let cost = if a[i - 1] == b[j - 1] { 0u16 } else { 1 };
-                curr[j] = (prev[j] + 1)
-                    .min(curr[j - 1] + 1)
-                    .min(prev[j - 1] + cost);
+                curr[j] = (prev[j] + 1)        // deletion
+                    .min(curr[j - 1] + 1)       // insertion
+                    .min(prev[j - 1] + cost);   // substitution
+
+                // transposition: swap of adjacent chars
+                if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                    curr[j] = curr[j].min(prev2[j - 2] + 1);
+                }
                 row_min = row_min.min(curr[j]);
             }
             if row_min as usize > max_k { return max_k + 1; }
+            std::mem::swap(&mut prev2, &mut prev);
             std::mem::swap(&mut prev, &mut curr);
         }
 
@@ -372,89 +391,27 @@ impl FuzzyIndex {
     }
 
     /// CGL tree search with confusion-aware pruning + fingerprint deletion/insertion.
-    fn search_tree(&self, q: &[u8]) -> Vec<(usize, usize)> {
+    /// Query the CGL tree for Hamming matches (supplements brute force).
+    fn search_tree_node(&self, root: &tree::CglNode, q: &[u8]) -> Vec<(usize, usize)> {
         let alt_query = AlteredString::new(q, None);
-        let qlen = q.len();
         let k = self.k;
-        let q_fp = fingerprint::compute(q);
+        let qlen = q.len();
 
         let config = tree::PruneConfig {
             confusion: Some(&self.scorer.confusion),
             prune_threshold: 0.08,
         };
-        let raw = tree::query_with_pruning(self.root.as_ref(), &alt_query, self.k, &config);
+        let raw = tree::query_with_pruning(Some(root), &alt_query, k, &config);
 
-        let mut seen = HashSet::new();
-        let mut results = Vec::with_capacity(16);
-
-        // CGL tree matches (Hamming-based: substitutions + transpositions)
-        for m in &raw {
-            seen.insert(m.origin);
-        }
-
-        if let Some(ref inverter) = self.inverter {
-            let leaf_map = &self.leaf_map;
-            let f = |i: usize| -> Option<usize> { leaf_map.get(&i).copied() };
-            for m in &raw {
-                if let Some(&label) = leaf_map.get(&m.origin) {
-                    for idx in inverter.invert(label, &f) {
-                        seen.insert(idx);
-                    }
-                }
-            }
-        }
-
-        // verify Hamming on tree candidates
-        for idx in &seen {
-            if let Some(term) = self.terms.get(*idx) {
+        let mut results = Vec::with_capacity(raw.len());
+        for m in raw {
+            if let Some(term) = self.terms.get(m.origin) {
                 let d = fast_hamming(q, qlen, term, k);
                 if d <= k {
-                    results.push((*idx, d));
+                    results.push((m.origin, d));
                 }
             }
         }
-
-        // fingerprint scan for deletions/insertions (tree only does same-length Hamming)
-        let n = self.terms.len();
-        for i in 0..n {
-            if seen.contains(&i) { continue; }
-
-            let tlen = self.term_lengths[i];
-            let tfp = &self.fingerprints[i];
-
-            if fingerprint::could_be_deletion(&q_fp, tfp, qlen, tlen) {
-                if self.verify_deletion(q, &self.terms[i]) {
-                    seen.insert(i);
-                    results.push((i, 1));
-                    continue;
-                }
-            }
-
-            if fingerprint::could_be_insertion(&q_fp, tfp, qlen, tlen) {
-                if self.verify_insertion(q, &self.terms[i]) {
-                    seen.insert(i);
-                    results.push((i, 1));
-                    continue;
-                }
-            }
-        }
-
-        // term_map lookup for query deletion variants
-        let mut buf = Vec::with_capacity(qlen);
-        for skip in 0..qlen {
-            buf.clear();
-            buf.extend_from_slice(&q[..skip]);
-            buf.extend_from_slice(&q[skip + 1..]);
-            if let Some(indices) = self.term_map.get(&buf) {
-                for &idx in indices {
-                    if !seen.contains(&idx) {
-                        seen.insert(idx);
-                        results.push((idx, 1));
-                    }
-                }
-            }
-        }
-
         results
     }
 
@@ -466,16 +423,95 @@ impl FuzzyIndex {
         self.terms.is_empty()
     }
 
+    /// Add a term to the index. Invalidates lazy caches (rebuilt on next search).
+    pub fn add(&mut self, term: &str) {
+        let lower: Vec<u8> = term.as_bytes().iter().map(|b| b.to_ascii_lowercase()).collect();
+        self.term_lengths.push(lower.len());
+        self.fingerprints.push(fingerprint::compute(&lower));
+        self.terms.push(lower);
+        self.terms_display.push(term.to_string());
+        // invalidate lazy caches
+        self.col_terms = OnceLock::new();
+        self.encoded_terms = OnceLock::new();
+        self.term_map = OnceLock::new();
+        self.root = OnceLock::new();
+    }
+
+    /// Remove a term by index. Invalidates lazy caches.
+    pub fn remove(&mut self, index: usize) {
+        if index >= self.terms.len() { return; }
+        self.terms.remove(index);
+        self.terms_display.remove(index);
+        self.term_lengths.remove(index);
+        self.fingerprints.remove(index);
+        self.col_terms = OnceLock::new();
+        self.encoded_terms = OnceLock::new();
+        self.term_map = OnceLock::new();
+        self.root = OnceLock::new();
+    }
+
+    /// Remove all terms matching a predicate. Returns number removed.
+    pub fn remove_where(&mut self, predicate: impl Fn(&str) -> bool) -> usize {
+        let mut removed = 0;
+        let mut i = 0;
+        while i < self.terms_display.len() {
+            if predicate(&self.terms_display[i]) {
+                self.terms.remove(i);
+                self.terms_display.remove(i);
+                self.term_lengths.remove(i);
+                self.fingerprints.remove(i);
+                removed += 1;
+            } else {
+                i += 1;
+            }
+        }
+        if removed > 0 {
+            self.col_terms = OnceLock::new();
+            self.encoded_terms = OnceLock::new();
+            self.term_map = OnceLock::new();
+            self.root = OnceLock::new();
+        }
+        removed
+    }
+
+    /// Export index data for serialization. Returns (terms, k) that can reconstruct the index.
+    pub fn export(&self) -> (Vec<String>, usize) {
+        (self.terms_display.clone(), self.k)
+    }
+
+    /// Reconstruct an index from exported data.
+    pub fn import(terms: &[String], k: usize) -> Result<Self> {
+        let refs: Vec<&str> = terms.iter().map(|s| s.as_str()).collect();
+        Self::build(&refs, k)
+    }
+
     pub fn stats(&self) -> IndexStats {
         IndexStats {
             num_terms: self.terms.len(),
             max_mismatches: self.k,
-            sigma: self.sigma,
-            tree_nodes: tree::node_count(self.root.as_ref()),
-            leaf_count: self.leaf_map.values().collect::<HashSet<_>>().len(),
-            strategy: if self.use_tree { "tree" } else { "brute" }.into(),
+            has_tree: self.root.get().is_some_and(|r| r.is_some()),
         }
     }
+}
+
+/// Compute contiguous ranges where query matches term (for highlighting).
+/// Returns (start, end) pairs of matching character spans.
+fn compute_match_ranges(query: &[u8], term: &[u8]) -> Vec<(usize, usize)> {
+    let len = query.len().min(term.len());
+    let mut ranges = Vec::new();
+    let mut start: Option<usize> = None;
+
+    for i in 0..len {
+        if query[i] == term[i] {
+            if start.is_none() { start = Some(i); }
+        } else if let Some(s) = start.take() {
+            ranges.push((s, i));
+        }
+    }
+    if let Some(s) = start {
+        ranges.push((s, len));
+    }
+    ranges
 }
 
 #[inline]
@@ -520,10 +556,7 @@ fn fast_hamming(q: &[u8], qlen: usize, term: &[u8], max_k: usize) -> usize {
 pub struct IndexStats {
     pub num_terms: usize,
     pub max_mismatches: usize,
-    pub sigma: usize,
-    pub tree_nodes: usize,
-    pub leaf_count: usize,
-    pub strategy: String,
+    pub has_tree: bool,
 }
 
 #[cfg(test)]
@@ -568,21 +601,20 @@ mod tests {
     fn small_dataset_uses_brute() {
         let terms = vec!["a", "b", "c"];
         let idx = FuzzyIndex::build(&terms, 1).unwrap();
-        assert_eq!(idx.stats().strategy, "brute");
+        assert!(!idx.stats().has_tree);
     }
 
     #[test]
-    fn inverter_recovers_terms() {
-        let terms: Vec<&str> = (0..50).map(|i| match i % 5 {
-            0 => "apple",
-            1 => "apply",
-            2 => "ample",
-            3 => "ankle",
-            _ => "angle",
-        }).collect();
-        let idx = FuzzyIndex::build(&terms, 2).unwrap();
-        let results = idx.search("apple", 10).unwrap();
+    fn large_dataset_builds_tree() {
+        let terms: Vec<String> = (0..6000).map(|i| format!("term{:05}", i)).collect();
+        let refs: Vec<&str> = terms.iter().map(|s| s.as_str()).collect();
+        let idx = FuzzyIndex::build(&refs, 2).unwrap();
+        // tree is lazy — not built until first search
+        assert!(!idx.stats().has_tree);
+        let results = idx.search("term03000", 5).unwrap();
         assert!(!results.is_empty());
+        // now tree should be built
+        assert!(idx.stats().has_tree);
     }
 
     #[test]
