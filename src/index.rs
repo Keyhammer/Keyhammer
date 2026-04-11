@@ -7,13 +7,16 @@
 use std::collections::HashSet;
 
 use crate::altered::AlteredString;
+use crate::encoding::TypoEncoding;
 use crate::error::{Error, Result};
 use crate::fingerprint::{self, Fingerprint};
 use crate::inverter::FunctionInverter;
-use crate::scorer::TypoScorer;
+use crate::scorer::{KeyboardLayout, TypoScorer};
 use crate::tree;
 
-const TREE_THRESHOLD: usize = 100_000;
+/// With lazy tree construction, the build is fast at any scale.
+/// The threshold determines when to switch from brute force to tree-based search.
+const TREE_THRESHOLD: usize = 5_000;
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -25,12 +28,13 @@ pub struct SearchResult {
 
 pub struct FuzzyIndex {
     terms: Vec<Vec<u8>>,
+    terms_display: Vec<String>,
     term_lengths: Vec<usize>,
-    /// Columnar layout for SIMD-friendly scan.
     col_terms: crate::columnar::ColumnarTerms,
-    /// Fingerprint per term — 26 bytes each, used for deletion/insertion detection.
     fingerprints: Vec<Fingerprint>,
-    /// Exact term lookup for O(1) matching of query deletion variants.
+    /// Pre-encoded terms using typo-optimal encoding (XOR+popcount comparison).
+    encoded_terms: Vec<Vec<u8>>,
+    encoding: TypoEncoding,
     term_map: std::collections::HashMap<Vec<u8>, Vec<usize>>,
     root: Option<tree::CglNode>,
     inverter: Option<FunctionInverter>,
@@ -42,15 +46,31 @@ pub struct FuzzyIndex {
 }
 
 impl FuzzyIndex {
+    const MAX_K: usize = 4;
+
+    /// Build with default QWERTY layout.
     pub fn build(terms: &[&str], k: usize) -> Result<Self> {
+        Self::build_with_layout(terms, k, KeyboardLayout::Qwerty)
+    }
+
+    /// Build with a specific keyboard layout for confusion-aware scoring.
+    pub fn build_with_layout(terms: &[&str], k: usize, layout: KeyboardLayout) -> Result<Self> {
         if terms.is_empty() {
             return Err(Error::EmptyInput);
+        }
+        if k > Self::MAX_K {
+            return Err(Error::KTooLarge { k, max: Self::MAX_K });
         }
 
         let max_len = terms.iter().map(|t| t.len()).max().unwrap_or(0);
         let n = terms.len();
-        let scorer = TypoScorer::new(max_len);
-        let terms_owned: Vec<Vec<u8>> = terms.iter().map(|t| t.as_bytes().to_vec()).collect();
+        let scorer = TypoScorer::with_layout(max_len, layout);
+        // normalize to lowercase for case-insensitive matching
+        let terms_owned: Vec<Vec<u8>> = terms.iter()
+            .map(|t| t.as_bytes().iter().map(|b| b.to_ascii_lowercase()).collect())
+            .collect();
+        // keep originals for display in results
+        let terms_display: Vec<String> = terms.iter().map(|t| t.to_string()).collect();
         let term_lengths: Vec<usize> = terms_owned.iter().map(|t| t.len()).collect();
 
         // fingerprints: 26 bytes per term, O(n) total
@@ -67,12 +87,21 @@ impl FuzzyIndex {
 
         let col_terms = crate::columnar::ColumnarTerms::build(&terms_owned);
 
+        // typo-optimal encoding: remap chars so XOR+popcount = confusion distance
+        let encoding = TypoEncoding::from_layout(layout);
+        let encoded_terms: Vec<Vec<u8>> = terms_owned.iter()
+            .map(|t| encoding.encode_str(t))
+            .collect();
+
         if n < TREE_THRESHOLD {
             return Ok(Self {
                 terms: terms_owned,
+                terms_display,
                 term_lengths,
                 col_terms,
                 fingerprints,
+                encoded_terms,
+                encoding,
                 term_map,
                 root: None,
                 inverter: None,
@@ -102,9 +131,12 @@ impl FuzzyIndex {
 
         Ok(Self {
             terms: terms_owned,
+            terms_display,
             term_lengths,
             col_terms,
             fingerprints,
+            encoded_terms,
+            encoding,
             term_map,
             root,
             inverter: Some(inverter),
@@ -117,7 +149,9 @@ impl FuzzyIndex {
     }
 
     pub fn search(&self, query: &str, max_results: usize) -> Result<Vec<SearchResult>> {
-        let q = query.as_bytes();
+        let q_lower: Vec<u8> = query.as_bytes().iter().map(|b| b.to_ascii_lowercase()).collect();
+        let q = &q_lower;
+        let q_encoded = self.encoding.encode_str(q);
 
         let candidates = if self.use_tree {
             self.search_tree(q)
@@ -125,18 +159,65 @@ impl FuzzyIndex {
             self.search_brute(q)
         };
 
+        let mut seen_idx: Vec<bool> = vec![false; self.terms.len()];
         let mut results: Vec<SearchResult> = candidates.into_iter()
             .map(|(idx, hd)| {
+                seen_idx[idx] = true;
                 let term = &self.terms[idx];
+                // combine two signals:
+                // 1. typo scorer (position weight + transposition + confusion matrix)
                 let typo_score = self.scorer.score(q, term);
+                // 2. encoding distance (bit-level confusion baked into representation)
+                let enc_dist = TypoEncoding::normalized_distance(&q_encoded, &self.encoded_terms[idx]);
+                // final score: blend both (encoding is a tiebreaker for similar typo scores)
+                let combined = if hd == 0 && q.len() == term.len() {
+                    1.0 // exact match
+                } else {
+                    typo_score.score * 0.7 + (1.0 - enc_dist) * 0.3
+                };
                 SearchResult {
-                    term: unsafe { String::from_utf8_unchecked(term.clone()) },
+                    term: self.terms_display[idx].clone(),
                     term_index: idx,
-                    score: typo_score.score,
+                    score: combined,
                     hamming_distance: hd,
                 }
             })
             .collect();
+
+        // multi-word fallback: if query contains spaces and few results,
+        // search for individual tokens and boost terms that match multiple tokens
+        if q.contains(&b' ') && results.len() < max_results {
+            let tokens: Vec<&[u8]> = q.split(|b| *b == b' ')
+                .filter(|t| t.len() >= 2)
+                .collect();
+
+            if tokens.len() > 1 {
+                // for each term, count how many query tokens fuzzy-match
+                for (idx, term) in self.terms.iter().enumerate() {
+                    if seen_idx[idx] { continue; }
+                    let mut token_matches = 0u32;
+                    for token in &tokens {
+                        // check if token appears as a fuzzy substring of the term
+                        if term.windows(token.len()).any(|w| {
+                            let d: usize = w.iter().zip(token.iter())
+                                .filter(|(a, b)| a != b).count();
+                            d <= self.k
+                        }) {
+                            token_matches += 1;
+                        }
+                    }
+                    if token_matches > 0 {
+                        let score = token_matches as f32 / tokens.len() as f32;
+                        results.push(SearchResult {
+                            term: self.terms_display[idx].clone(),
+                            term_index: idx,
+                            score: score * 0.8, // slightly lower than direct matches
+                            hamming_distance: self.k,
+                        });
+                    }
+                }
+            }
+        }
 
         results.sort_unstable_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(max_results);
