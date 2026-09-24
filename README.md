@@ -8,10 +8,11 @@ License: [AGPL-3.0-or-later](LICENSE)
 ## Status
 
 Early prototype. Nothing is published to crates.io or npm, and the API is
-unstable. The new engine is much faster than the previous one. Its ranking
-quality is on par with a simple "edit distance plus frequency" baseline within
-measurement noise on the benchmark corpus (300 typo pairs, provisional costs),
-not a measurable gain. See [`docs/benchmarks/m0.md`](docs/benchmarks/m0.md).
+unstable. The new engine is much faster than the previous one. On the
+benchmark corpus (300 typo pairs, provisional costs) its ranking quality is
+statistically indistinguishable from a simple "edit distance plus frequency"
+baseline: no evidence that it is worse, none that it is better. See
+[`docs/benchmarks/m0.md`](docs/benchmarks/m0.md).
 
 ## What it is
 
@@ -28,9 +29,11 @@ dependencies. Queries and terms are lowercased bytes for now.
   band around the diagonal.
 - The search is exact best-first top-k: nodes are expanded in order of their
   lower bound, and an oracle test checks the results against brute force.
-- Results are ranked by edit count (the weighted cost rounded up to whole
-  edits), then by higher frequency weight, then by term id. The weighted costs
-  still set the budget and the candidates. `Ranking::Cost` ranks by the exact
+- By default (`Ranking::Coarse`) results are ranked by the weighted cost
+  rounded up to whole units of 16, then by higher frequency weight, then by
+  term id. This is not a count of edits: an edit on the first byte counts as
+  two units and two cheap edits (8 + 8) count as one. The weighted costs still
+  set the budget and the candidates. `Ranking::Exact` ranks by the exact
   weighted cost instead.
 - An optional subtree signature bound (each node keeps the length range and a
   letter mask of the terms below it) prunes subtrees that cannot improve the
@@ -77,14 +80,17 @@ addendum for the current ranking):
 
 | Engine | MRR | p95 latency (us) |
 |---|---|---|
-| legacy (previous engine) | 0.255 | 44721.1 |
-| baseline | 0.433 | 83123.8 |
-| new+tsb | 0.429 | 390.3 |
+| legacy (previous engine) | 0.255 | 44934.5 |
+| baseline | 0.433 | 76590.3 |
+| new+tsb | 0.429 | 384.2 |
 
-The p95 of the previous engine is 114.6x that of the new one. The new engine's
-MRR minus the baseline's is +0.008, -0.004 and -0.004 at 10000, 100000 and
-274137 words: never more than 0.005 below it. With 300 queries one query moves
-MRR by up to 0.0033, so this is parity within measurement noise, not a gain.
+The p95 of the previous engine is 117.0x that of the new one. The paired MRR
+difference of the new engine minus the baseline is +0.007, -0.003 and -0.004 at
+10000, 100000 and 274137 words, with 95% intervals of about +-0.017 that all
+contain 0: statistically indistinguishable, not a gain, and these 300 pairs
+cannot show parity to within a few thousandths either. Against the engine's
+previous ordering by exact cost the gain is significant (+0.015, +0.028 and
++0.040).
 
 ## Repository layout
 
