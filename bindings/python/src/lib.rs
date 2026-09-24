@@ -28,6 +28,7 @@ use keyhammer::trie::Trie;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyInt, PyString};
 
 create_exception!(
     _keyhammer,
@@ -78,6 +79,15 @@ enum Ranking {
     Exact,
 }
 
+impl From<CoreRanking> for Ranking {
+    fn from(r: CoreRanking) -> Self {
+        match r {
+            CoreRanking::Exact => Ranking::Exact,
+            _ => Ranking::Coarse,
+        }
+    }
+}
+
 impl From<Ranking> for CoreRanking {
     fn from(r: Ranking) -> Self {
         match r {
@@ -97,7 +107,7 @@ fn bounded(name: &str, v: i64, max: u64) -> Result<u64, String> {
 
 /// `bounded` for a `usize` field capped at `u32::MAX`.
 fn to_usize(name: &str, v: i64) -> PyResult<usize> {
-    let v = bounded(name, v, u32::MAX.into()).map_err(PyValueError::new_err)?;
+    let v = bounded(name, v, u32::MAX.into()).map_err(KeyhammerError::new_err)?;
     Ok(usize::try_from(v).unwrap_or(usize::MAX))
 }
 
@@ -130,7 +140,7 @@ impl SearchConfig {
     fn new(k: i64, budget: i64, ranking: Ranking, tsb: bool, max_nodes: i64) -> PyResult<Self> {
         Ok(Self {
             k: to_usize("k", k)?,
-            budget: to_u16("budget", budget).map_err(PyValueError::new_err)?,
+            budget: to_u16("budget", budget).map_err(KeyhammerError::new_err)?,
             ranking,
             tsb,
             max_nodes: to_usize("max_nodes", max_nodes)?,
@@ -144,7 +154,7 @@ impl SearchConfig {
         Self {
             k: c.k,
             budget: c.budget,
-            ranking: Ranking::Coarse,
+            ranking: c.ranking.into(),
             tsb: c.tsb,
             max_nodes: c.max_nodes,
         }
@@ -178,8 +188,8 @@ impl From<&SearchConfig> for CoreConfig {
 }
 
 /// One search result.
-#[pyclass(module = "keyhammer", frozen, get_all, eq, skip_from_py_object)]
-#[derive(Clone, PartialEq, Eq)]
+#[pyclass(module = "keyhammer", frozen, get_all, eq, hash, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct Hit {
     /// The matched term (lower-cased).
     term: String,
@@ -187,14 +197,18 @@ struct Hit {
     cost: u16,
     /// The term's weight.
     weight: u16,
+    /// Position in `items` of the entry that was kept (highest weight, first
+    /// among ties). Terms are lower-cased and deduplicated, so this is the
+    /// way to map a hit back to the caller's record.
+    index: u32,
 }
 
 #[pymethods]
 impl Hit {
     fn __repr__(&self) -> String {
         format!(
-            "Hit(term={:?}, cost={}, weight={})",
-            self.term, self.cost, self.weight
+            "Hit(term={:?}, cost={}, weight={}, index={})",
+            self.term, self.cost, self.weight, self.index
         )
     }
 }
@@ -252,9 +266,28 @@ impl Index {
     fn new(py: Python<'_>, items: &Bound<'_, PyAny>) -> PyResult<Self> {
         let mut owned: Vec<(String, u16)> = Vec::new();
         for item in items.try_iter()? {
-            let (term, weight): (String, i64) = item?.extract().map_err(|_| {
-                PyTypeError::new_err("items must be (term: str, weight: int) pairs")
+            let (term, weight): (Bound<'_, PyAny>, Bound<'_, PyAny>) =
+                item?.extract().map_err(|_| {
+                    PyTypeError::new_err("items must be (term: str, weight: int) pairs")
+                })?;
+            let term: String = term.extract().map_err(|e| {
+                if term.is_instance_of::<PyString>() {
+                    BuildError::new_err(
+                        "term is not valid Unicode text (for example a lone surrogate) and cannot be encoded as UTF-8",
+                    )
+                } else {
+                    e
+                }
             })?;
+            let weight = match weight.extract::<i64>() {
+                Ok(w) => w,
+                Err(_) if weight.is_instance_of::<PyInt>() => {
+                    return Err(BuildError::new_err(
+                        "weight must be between 0 and 65535 (integer out of range)",
+                    ));
+                }
+                Err(e) => return Err(e),
+            };
             let weight = to_u16("weight", weight).map_err(BuildError::new_err)?;
             let term = normalise("term", &term).map_err(BuildError::new_err)?;
             owned.push((term, weight));
@@ -282,7 +315,7 @@ impl Index {
     fn search(
         &self,
         py: Python<'_>,
-        query: &str,
+        query: &Bound<'_, PyAny>,
         k: Option<i64>,
         budget: Option<i64>,
         ranking: Option<Ranking>,
@@ -290,15 +323,30 @@ impl Index {
     ) -> PyResult<SearchResult> {
         let mut cfg = config.map_or_else(CoreConfig::default, CoreConfig::from);
         if let Some(k) = k {
-            cfg.k = to_usize("k", k)?;
+            cfg.k = to_usize("k", k).map_err(|e| SearchError::new_err(e.value(py).to_string()))?;
         }
         if let Some(b) = budget {
-            cfg.budget = to_u16("budget", b).map_err(PyValueError::new_err)?;
+            cfg.budget = to_u16("budget", b).map_err(|m| {
+                if b > 0 {
+                    BudgetTooLargeError::new_err(m)
+                } else {
+                    SearchError::new_err(m)
+                }
+            })?;
         }
         if let Some(r) = ranking {
             cfg.ranking = r.into();
         }
-        let q = normalise("query", query).map_err(PyValueError::new_err)?;
+        let query: String = query.extract().map_err(|e| {
+            if query.is_instance_of::<PyString>() {
+                SearchError::new_err(
+                    "query is not valid Unicode text (for example a lone surrogate) and cannot be encoded as UTF-8",
+                )
+            } else {
+                e
+            }
+        })?;
+        let q = normalise("query", &query).map_err(SearchError::new_err)?;
         let out = py
             .detach(|| Searcher::new().search(&self.trie, &self.costs, q.as_bytes(), &cfg))
             .map_err(|e| {
@@ -317,6 +365,7 @@ impl Index {
                     term: self.trie.term(h.id).to_owned(),
                     cost: h.cost,
                     weight: h.weight,
+                    index: self.trie.input_index(h.id),
                 })
                 .collect(),
             nodes_expanded: out.stats.nodes_expanded,

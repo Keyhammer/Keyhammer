@@ -2,8 +2,7 @@
 # Copyright (C) 2026 Robson Trasel
 """Type stubs for the compiled module (re-exported by `keyhammer`)."""
 
-import enum
-from typing import Iterable, Optional, Tuple
+from typing import ClassVar, Iterable, Optional, Tuple, final
 
 class KeyhammerError(ValueError): ...
 class BuildError(KeyhammerError): ...
@@ -11,10 +10,14 @@ class SearchError(KeyhammerError): ...
 class QueryTooLongError(SearchError): ...
 class BudgetTooLargeError(SearchError): ...
 
-class Ranking(enum.Enum):
-    COARSE = ...
-    EXACT = ...
+@final
+class Ranking:
+    COARSE: ClassVar[Ranking]
+    EXACT: ClassVar[Ranking]
+    def __eq__(self, value: object, /) -> bool: ...
+    def __hash__(self) -> int: ...
 
+@final
 class SearchConfig:
     k: int
     budget: int
@@ -32,17 +35,23 @@ class SearchConfig:
     @staticmethod
     def high_recall() -> SearchConfig: ...
 
+@final
 class Hit:
     term: str
     cost: int
     weight: int
+    index: int
+    def __eq__(self, value: object, /) -> bool: ...
+    def __hash__(self) -> int: ...
 
+@final
 class SearchResult:
     hits: list[Hit]
     nodes_expanded: int
     truncated: bool
     def __len__(self) -> int: ...
 
+@final
 class Index:
     def __new__(cls, items: Iterable[Tuple[str, int]]) -> Index: ...
     def __len__(self) -> int: ...

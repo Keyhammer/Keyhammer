@@ -81,7 +81,9 @@ def test_k_zero_and_no_match():
         ([("", 1)], kh.BuildError),
         ([("a" * 70000, 1)], kh.BuildError),
         ([("ok", -1)], kh.BuildError),
-        ([("ok", 70000)], kh.BuildError),
+        ([("ok", 65536)], kh.BuildError),
+        ([("ok", 2**70)], kh.BuildError),
+        ([("ab\ud800", 1)], kh.BuildError),
         ([("café", 1)], kh.BuildError),
         ([("ok", "x")], TypeError),
         ([("ok",)], TypeError),
@@ -99,15 +101,40 @@ def test_search_errors():
         idx.search("a" * 129)
     with pytest.raises(kh.BudgetTooLargeError):
         idx.search("java", budget=65)
+    with pytest.raises(kh.BudgetTooLargeError):
+        idx.search("java", budget=70000)
     with pytest.raises(kh.SearchError):
-        idx.search("java", budget=1000)
-    with pytest.raises(ValueError):  # every keyhammer error is a ValueError
         idx.search("café")
-    with pytest.raises(ValueError):
+    with pytest.raises(kh.SearchError):
+        idx.search("ab\ud800")
+    with pytest.raises(kh.SearchError):
         idx.search("java", k=-1)
-    with pytest.raises(ValueError):
+    with pytest.raises(kh.SearchError):
+        idx.search("java", budget=-1)
+    with pytest.raises(kh.KeyhammerError):
         kh.SearchConfig(budget=70000)
-    assert issubclass(kh.QueryTooLongError, kh.KeyhammerError)
+    with pytest.raises(TypeError):
+        idx.search(5)
+    assert issubclass(kh.QueryTooLongError, kh.SearchError)
+    assert issubclass(kh.SearchError, kh.KeyhammerError)
+    assert issubclass(kh.KeyhammerError, ValueError)
+
+
+def test_hit_index_maps_back_to_input_position():
+    items = [("Rust", 1), ("go", 3), ("rust", 7), ("zig", 2)]
+    idx = kh.Index(items)
+    hit = idx.search("rust").hits[0]
+    assert hit.index == 2  # highest weight wins among duplicates
+    assert items[hit.index][1] == hit.weight
+    tie = kh.Index([("rust", 5), ("Rust", 5)]).search("rust").hits[0]
+    assert tie.index == 0  # first among ties
+    assert hash(hit) == hash(idx.search("rust").hits[0])
+
+
+def test_config_defaults_and_high_recall():
+    assert kh.SearchConfig() == kh.SearchConfig(10, 32, kh.Ranking.COARSE, False, 100000)
+    cfg = kh.SearchConfig.high_recall()
+    assert cfg.ranking == kh.Ranking.COARSE
 
 
 def test_public_surface():

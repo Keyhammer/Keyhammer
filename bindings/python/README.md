@@ -4,8 +4,8 @@ Python binding for the Keyhammer core: typo-tolerant top-k search over a
 compact trie, with keyboard-aware edit costs. **Unpublished prototype**: nothing
 is on PyPI and the API may change. The binding is a thin PyO3 layer over the
 `keyhammer` Rust crate in this repository; the algorithm and its measurements
-are described in the [top-level README](../../README.md) and
-[`docs/benchmarks/`](../../docs/benchmarks/).
+are described in the [top-level README](https://github.com/Keyhammer/Keyhammer/blob/main/README.md) and
+[`docs/benchmarks/`](https://github.com/Keyhammer/Keyhammer/tree/main/docs/benchmarks).
 
 ## Install (from source)
 
@@ -40,16 +40,26 @@ kh.SearchConfig.high_recall()                   # the core's opt-in preset (budg
 ```
 
 - `Index(items)`: `items` is any iterable of `(term: str, weight: int)`, weight
-  in `0..=65535`. Duplicate terms are merged and keep the highest weight.
+  in `0..=65535`. Terms are lower-cased first, so `Rust` and `rust` are the
+  same term; duplicates keep the highest weight.
+- `Hit` has `term` (lower-cased), `cost`, `weight` and `index`: the position in
+  `items` of the entry that was kept (highest weight, first among ties). Since
+  terms are lower-cased and deduplicated, `index` is how to map a hit back to
+  your own record.
+- `Index`, `SearchConfig` and `Ranking` cannot be pickled or copied.
 - `Index.search(query, k=None, budget=None, ranking=None, *, config=None)`:
   keyword values override `config`; without either, the core defaults are used
   (`k=10`, `budget=32`, `Ranking.COARSE`). `cost` is fixed point: 16 is one
   ordinary edit. `budget` is at most 64.
 - `Ranking.COARSE` and `Ranking.EXACT` are the core's two orderings.
 - Errors are exceptions, all subclasses of `keyhammer.KeyhammerError`, itself a
-  `ValueError`: `BuildError` (empty input, empty or over-long term, weight out
-  of range, non-ASCII term), `SearchError` with `QueryTooLongError` (query over
-  128 bytes) and `BudgetTooLargeError`. A malformed item raises `TypeError`.
+  `ValueError`. `BuildError`: empty input, empty or over-long term, weight out
+  of range, non-ASCII term, or a term that is not valid Unicode (such as a lone
+  surrogate). `SearchError` for a rejected search, with the subclasses
+  `QueryTooLongError` (query over 128 bytes) and `BudgetTooLargeError` (budget
+  above 64, or above 65535); a non-ASCII query or a negative `k` or `budget`
+  raises plain `SearchError`. `SearchConfig(...)` raises `KeyhammerError` for
+  out-of-range values. A malformed item raises `TypeError`.
 - Type stubs (`_keyhammer.pyi`) and `py.typed` ship with the package.
 
 ## Limits
@@ -84,8 +94,9 @@ single-threaded answer; that is a check, not a proof, and no free-threaded
 ```sh
 cd bindings/python
 maturin develop --release
-pip install pytest
+pip install pytest mypy
 pytest tests
+python -m mypy.stubtest --allowlist stubtest-allowlist.txt keyhammer
 cargo fmt --check && cargo clippy -- -D warnings
 ```
 
