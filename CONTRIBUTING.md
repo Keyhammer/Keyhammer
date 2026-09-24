@@ -25,4 +25,6 @@ would require a separate agreement, for example a contributor license agreement 
   `cargo clippy -p keyhammer --all-targets -- -D warnings` and
   `cargo test -p keyhammer`. `legacy/` is a frozen reference and is excluded
   from the strict lints.
+- Fuzz targets live in `crates/keyhammer/fuzz` (`cargo +nightly fuzz run <target>`);
+  see `docs/fuzzing.md`.
 - The core crate forbids `unsafe` and must stay free of runtime dependencies.

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["legacy", "crates/keyhammer", "bench", "bindings/wasm"]
-exclude = ["crates/node", "bench/competitors"]
+exclude = ["crates/node", "bench/competitors", "crates/keyhammer/fuzz"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

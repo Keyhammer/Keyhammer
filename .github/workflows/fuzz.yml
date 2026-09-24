@@ -1,0 +1,36 @@
+name: fuzz
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds to run each target
+        default: "60"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [never_panics, oracle_equality, tsb_equivalence]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked
+      - name: Fuzz ${{ matrix.target }}
+        working-directory: crates/keyhammer
+        run: >
+          cargo fuzz run ${{ matrix.target }} --
+          -max_total_time=${{ inputs.seconds || 60 }} -rss_limit_mb=2048 -timeout=10
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: crates/keyhammer/fuzz/artifacts/
