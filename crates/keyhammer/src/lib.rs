@@ -14,4 +14,5 @@
 extern crate alloc;
 
 pub mod cost;
+pub mod search;
 pub mod trie;
