@@ -13,18 +13,61 @@ use keyhammer::trie::Trie;
 use keyhammer_legacy::FuzzyIndex;
 
 const TOP: usize = 10;
+/// Queries the baseline runs untimed before timing (each is a full dictionary scan).
+const BASELINE_WARMUP: usize = 20;
 /// Two-sided 95% normal quantile, for intervals of paired differences.
 const Z95: f64 = 1.96;
 
+/// Prints `msg` to stderr and exits with status 2 (bad input or usage, as opposed
+/// to status 1, a failed gate).
+fn die(msg: &str) -> ! {
+    eprintln!("error: {msg}");
+    std::process::exit(2);
+}
+
+const HELP: &str = "\
+M0 gate harness: quality (MRR, R@1) and latency of the new engine, the legacy
+engine and an edit-distance baseline on the same typo pairs.
+
+USAGE:
+    m0 [DATA_DIR]
+
+ARGS:
+    DATA_DIR    directory with tests.tsv and words-{10000,100000,full}.tsv
+                (default: bench/data; see fetch-data.mjs and prepare-m0-data.mjs)
+
+EXIT STATUS:
+    0    every gate check on the largest dictionary passed
+    1    a gate check printed FAIL, a legacy search returned an error, or a row
+         needed for the gate was missing
+    2    bad usage or malformed input (a TSV line without a tab, a frequency
+         that is not a u16, a missing file)
+
+The gate checks are (b) p95 legacy / new >= 10x and (c) MRR of new+tsb >= baseline.
+The paired-interval line (c') is informational and does not affect the exit status.
+On the published data (c) fails at 274137 words, so status 1 is the expected result; it
+is the documented G0 PARTIAL PASS (docs/benchmarks/m0.md), not a regression.
+Each engine runs the whole query list once, untimed, before it is timed (the
+baseline, a full scan per query, runs its first 20 queries).
+";
+
+/// Reads a two-column TSV file. A line without a tab is an error naming the
+/// file and line, never silently dropped.
 fn read_tsv(path: &str) -> Vec<(String, String)> {
-    fs::read_to_string(path)
-        .unwrap_or_else(|e| {
-            panic!("cannot read {path}: {e} (run fetch-data.mjs and prepare-m0-data.mjs first)")
-        })
-        .lines()
-        .filter_map(|l| {
-            l.split_once('\t')
-                .map(|(a, b)| (a.to_string(), b.to_string()))
+    let text = fs::read_to_string(path).unwrap_or_else(|e| {
+        die(&format!(
+            "cannot read {path}: {e} (run fetch-data.mjs and prepare-m0-data.mjs first)"
+        ))
+    });
+    text.lines()
+        .enumerate()
+        .filter(|(_, l)| !l.is_empty())
+        .map(|(i, l)| match l.split_once('\t') {
+            Some((a, b)) => (a.to_string(), b.to_string()),
+            None => die(&format!(
+                "{path}:{}: expected two tab-separated columns, got {l:?}",
+                i + 1
+            )),
         })
         .collect()
 }
@@ -43,6 +86,8 @@ struct Row {
     p50_us: f64,
     p95_us: f64,
     extra: String,
+    /// Searches that returned an error (only the legacy engine can).
+    errors: usize,
 }
 
 fn score(rank: Option<usize>, rr: &mut Vec<f64>, r1: &mut usize) {
@@ -116,11 +161,22 @@ fn osa_within(a: &[u8], b: &[u8], k: usize) -> Option<usize> {
     (d[m][n] <= k).then_some(d[m][n])
 }
 
-fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
+/// Runs every engine on one dictionary; returns the rows and the number of words.
+fn run(size: &str, dir: &str, tests: &[(String, String)]) -> (Vec<Row>, usize) {
     let words: Vec<(String, u16)> = read_tsv(&format!("{dir}/words-{size}.tsv"))
         .into_iter()
-        .map(|(w, f)| (w, f.parse().unwrap_or(0)))
+        .enumerate()
+        .map(|(i, (w, f))| match f.parse() {
+            Ok(f) => (w, f),
+            Err(e) => die(&format!(
+                "{dir}/words-{size}.tsv:{}: frequency {f:?} is not a u16: {e}",
+                i + 1
+            )),
+        })
         .collect();
+    if words.is_empty() {
+        die(&format!("{dir}/words-{size}.tsv: no words"));
+    }
     let mut rows = Vec::new();
     println!("\n=== dictionary: {} words ({size}) ===", words.len());
 
@@ -156,6 +212,13 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
         let mut searcher = Searcher::new();
         let (mut rr, mut r1, mut expanded, mut ties) = (Vec::new(), 0usize, 0usize, 0usize);
         let mut lat = Vec::new();
+        for (typo, _) in tests {
+            // warm-up pass: untimed, so caches and the searcher's buffers are
+            // primed before the first timed query.
+            searcher
+                .search(&trie, &cm, typo.as_bytes(), &cfg)
+                .expect("search");
+        }
         for (typo, right) in tests {
             let t = Instant::now();
             let out = searcher
@@ -181,6 +244,7 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
             r1: r1 as f64 / n,
             p50_us: percentile(&mut lat.clone(), 0.5),
             p95_us: percentile(&mut lat, 0.95),
+            errors: 0,
             extra: format!(
                 "nodes/query={:.0} max={max_nodes} truncated={truncated} build={build_ms:.0}ms ties@10={:.2}",
                 expanded as f64 / n,
@@ -194,10 +258,17 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
     let legacy = FuzzyIndex::build(&terms, 2).expect("legacy");
     let (mut rr, mut r1) = (Vec::new(), 0usize);
     let mut lat = Vec::new();
+    let mut legacy_errors = 0usize;
+    for (typo, _) in tests {
+        let _ = legacy.search(typo, TOP); // warm-up pass, untimed
+    }
     for (typo, right) in tests {
         let t = Instant::now();
-        let res = legacy.search(typo, TOP).unwrap_or_default();
+        let res = legacy.search(typo, TOP);
         lat.push(t.elapsed().as_secs_f64() * 1e6);
+        // a failed search counts as no result (reciprocal rank 0) and is reported.
+        legacy_errors += usize::from(res.is_err());
+        let res = res.unwrap_or_default();
         score(res.iter().position(|r| r.term == *right), &mut rr, &mut r1);
     }
     let n = tests.len() as f64;
@@ -208,7 +279,12 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
         r1: r1 as f64 / n,
         p50_us: percentile(&mut lat.clone(), 0.5),
         p95_us: percentile(&mut lat, 0.95),
-        extra: String::new(),
+        errors: legacy_errors,
+        extra: if legacy_errors > 0 {
+            format!("errors={legacy_errors}")
+        } else {
+            String::new()
+        },
     });
 
     // baseline: unit edit distance <= 2, then weight, then id. ties@10 is the
@@ -216,6 +292,12 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
     // unit distance.
     let (mut rr, mut r1, mut ties) = (Vec::new(), 0usize, 0usize);
     let mut lat = Vec::new();
+    // Each query is a full scan, so a short untimed warm-up is enough.
+    for (typo, _) in tests.iter().take(BASELINE_WARMUP) {
+        for (w, _) in &words {
+            let _ = osa_within(typo.as_bytes(), w.as_bytes(), 2);
+        }
+    }
     for (typo, right) in tests {
         let t = Instant::now();
         let mut cand: Vec<(usize, u32, usize)> = Vec::new();
@@ -242,6 +324,7 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
         r1: r1 as f64 / n,
         p50_us: percentile(&mut lat.clone(), 0.5),
         p95_us: percentile(&mut lat, 0.95),
+        errors: 0,
         extra: format!("ties@10={:.2}", ties as f64 / n),
     });
 
@@ -274,18 +357,52 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
             hr.p95_us / tsb.p95_us
         );
     }
-    rows
+    let n_words = words.len();
+    (rows, n_words)
 }
 
 fn main() {
-    let dir = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "bench/data".to_string());
+    let mut dir = None;
+    for a in std::env::args().skip(1) {
+        match a.as_str() {
+            "-h" | "--help" => {
+                print!("{HELP}");
+                return;
+            }
+            _ if a.starts_with('-') => die(&format!("unknown option {a:?} (see --help)")),
+            _ if dir.is_some() => die("expected at most one DATA_DIR (see --help)"),
+            _ => dir = Some(a),
+        }
+    }
+    let dir = dir.unwrap_or_else(|| "bench/data".to_string());
     let tests = read_tsv(&format!("{dir}/tests.tsv"));
+    if tests.is_empty() {
+        die(&format!("{dir}/tests.tsv: no typo pairs"));
+    }
     println!("{} typo pairs", tests.len());
     let mut last = Vec::new();
+    // Legacy searches that errored, over all sizes: the legacy latency is not
+    // comparable when some searches bail out early.
+    // Word counts of the dictionaries where the strict MRR check (c) fails.
+    let mut mrr_fails: Vec<usize> = Vec::new();
+    let mut legacy_errors = 0usize;
     for size in ["10000", "100000", "full"] {
-        last = run(size, &dir, &tests);
+        let (rows, n_words) = run(size, &dir, &tests);
+        last = rows;
+        let get = |n: &str| last.iter().find(|r| r.name == n);
+        if let (Some(tsb), Some(base)) = (get("new+tsb"), get("baseline")) {
+            if tsb.mrr < base.mrr {
+                mrr_fails.push(n_words);
+            }
+        }
+        legacy_errors += last.iter().map(|r| r.errors).sum::<usize>();
+    }
+    let mut failed = legacy_errors > 0;
+    if legacy_errors > 0 {
+        println!(
+            "
+FAIL: {legacy_errors} legacy searches returned an error"
+        );
     }
     let get = |n: &str| last.iter().find(|r| r.name == n);
     if let (Some(new), Some(tsb), Some(legacy), Some(base)) =
@@ -299,6 +416,7 @@ fn main() {
             "p95 legacy / new = {ratio:.1}x (need >= 10x): {}",
             if ratio >= 10.0 { "PASS" } else { "FAIL" }
         );
+        failed |= ratio < 10.0;
         // (c) quality is judged on the default mode (new+tsb, coarse ranking).
         println!(
             "MRR default mode (new+tsb) {:.3} vs baseline {:.3}",
@@ -308,14 +426,34 @@ fn main() {
             "  (c) strict (need >= baseline): {}",
             if tsb.mrr >= base.mrr { "PASS" } else { "FAIL" }
         );
+        failed |= tsb.mrr < base.mrr;
         let (m, se, _, hi) = paired(&tsb.rr, &base.rr);
         println!(
             "  (c') no evidence of being worse (need diff + {Z95} SE >= 0: {m:+.4} + {Z95} x {se:.4} = {hi:+.4}): {}",
             if hi >= 0.0 { "PASS" } else { "FAIL" }
         );
+        let mrr_part = if mrr_fails.is_empty() {
+            "the strict MRR check (c) passes at every size".to_string()
+        } else {
+            let sizes: Vec<String> = mrr_fails.iter().map(usize::to_string).collect();
+            format!(
+                "the strict MRR check (c) fails at {} words",
+                sizes.join(" and ")
+            )
+        };
         println!(
-            "G0 under the original criteria remains a partial pass: speed passes, the strict MRR check (c) fails at 100000 and 274137 words. (c') is informational: it says only that these data do not show the new ranking to be worse than the baseline; it does not by itself pass G0, and any non-inferiority margin for a future run should be fixed in advance."
+            "G0 under the original criteria: speed {}, {mrr_part}. (c') is informational: it says only that these data do not show the new ranking to be worse than the baseline; it does not by itself pass G0, and any non-inferiority margin for a future run should be fixed in advance.",
+            if ratio >= 10.0 { "passes" } else { "fails" }
         );
         println!("oracle equality: run `cargo test -p keyhammer` (must be green)");
+    } else {
+        println!(
+            "
+FAIL: a row needed for the G0 gate is missing"
+        );
+        failed = true;
+    }
+    if failed {
+        std::process::exit(1);
     }
 }

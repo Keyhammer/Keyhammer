@@ -32,6 +32,22 @@ pub fn whole_units(cost: Cost) -> Cost {
 pub const INF: Cost = 30_000;
 
 /// Bit that represents the character class of `b` (used by subtree signatures).
+///
+/// Only the low six bits of `b` count, so bytes that agree modulo 64 share a
+/// class: `b'a'` (97) and `b'!'` (33), for instance. Only the letters a-z are guaranteed distinct from one another;
+/// other bytes can share a class with them (digits with p-y, for instance). The
+/// collisions are harmless: the
+/// signatures only bound the search, and a collision can make a bound weaker
+/// (a class looks present when it is not), never wrong.
+///
+/// # Examples
+///
+/// ```
+/// use keyhammer::cost::class;
+///
+/// assert_ne!(class(b'a'), class(b'b'));
+/// assert_eq!(class(b'a'), class(b'!')); // 97 and 33 are equal modulo 64
+/// ```
 #[inline]
 pub fn class(b: u8) -> u64 {
     1u64 << (b & 63)

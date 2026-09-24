@@ -30,6 +30,16 @@ All notable changes to this project are documented here. The format follows
   is admissible, with what the tests check and what is only argued.
 
 ### Changed
+- The M0 harness (`bench/src/bin/m0.rs`) now exits with status 1 when a gate
+  check on the largest dictionary prints FAIL ((b) p95 ratio, (c) strict MRR;
+  the informational (c') does not count), when a legacy search returns an
+  error (counted and shown as `errors=N` in the legacy row) or when a gate row
+  is missing. Malformed TSV lines and non-`u16` frequencies now abort with
+  status 2 and the file and line, instead of being dropped or read as 0. Each
+  engine runs an untimed warm-up pass before timing. `--help` documents the
+  exit codes. Printed quality numbers are unchanged. On the published data (c)
+  fails on the full dictionary, so the harness exits 1 there; this is the
+  documented G0 partial pass (docs/benchmarks/m0.md), not a new failure.
 - License changed from MIT to AGPL-3.0-or-later, effective from the commit
   "chore: relicense to AGPL-3.0-or-later". Versions obtained before that commit
   remain under MIT for those who received them.

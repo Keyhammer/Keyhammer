@@ -103,3 +103,26 @@ fn whole_units_rounds_up_to_whole_units_of_16() {
         assert_eq!(whole_units(cost), units, "cost={cost}");
     }
 }
+
+#[test]
+fn deleting_beyond_the_query_costs_a_plain_indel() {
+    let cm = CostModel::qwerty();
+    // No byte at `qpos`, so nothing can be doubled: the ordinary indel cost.
+    assert_eq!(cm.del_cost(b"ab", 5), 16);
+    assert_eq!(cm.del_cost(b"ab", 2), 16);
+    assert_eq!(cm.del_cost(b"aa", 7), 16);
+    // Position 0 of an empty query still gets the first-byte factor.
+    assert_eq!(cm.del_cost(b"", 0), 24);
+}
+
+#[test]
+fn a_doubled_letter_at_position_zero_is_cheap_but_carries_the_first_byte_factor() {
+    let cm = CostModel::qwerty();
+    // A cheap doubled-letter insertion (8) times 1.5 at the first position.
+    assert_eq!(cm.ins_cost(b'a', Some(b'a'), 0), 12);
+    // Without the repeat it is an ordinary indel (16) times 1.5.
+    assert_eq!(cm.ins_cost(b'a', None, 0), 24);
+    assert_eq!(cm.ins_cost(b'a', Some(b'b'), 0), 24);
+    // Past the first position the factor is gone.
+    assert_eq!(cm.ins_cost(b'a', Some(b'a'), 1), 8);
+}
