@@ -249,15 +249,98 @@ use `|C|` distinct steps, each costing at least `c_min`:
 lower bounds on the same quantity, so `max(T_comp(k), T_let(k)) <= S`, which is
 what Case A needs.
 
-**Why `max` and not a sum (argued, untested).** `max` is used because the
-argument above makes it valid for any cost model with the stated minimum
-costs, and it needs no reasoning about whether one edit can be charged by both
-terms (a deletion of a query byte whose class is missing, for example, shortens
-the length gap and removes a missing class at once). A sum `T_comp + T_let`
-would need such a reasoning. Under the current `CostModel::qwerty()` costs a sum
-is not known to be inadmissible: the property test did not find a case where
-it overestimates, but this was not proved either way. A sum would be a possibly
-tighter bound, worth a separate change with its own proof and test.
+**Why `max` and not a sum.** `max` is used because the argument above makes
+it valid for any cost model with the stated minimum costs, and it needs no
+reasoning about whether one edit can be charged by both terms (a deletion of a
+query byte whose class is missing, for example, shortens the length gap and
+removes a missing class at once). Section 3a shows that under the current
+`CostModel::qwerty()` a sum `T_comp + T_let` is also admissible, that this
+needs one more property of the cost table, and that it prunes almost nothing
+more (`docs/benchmarks/sum-bound.md`); `max` stays.
+
+### 3a. A sum of the two terms (issue #44)
+
+Result: under the current `CostModel::qwerty()`, `T_comp(k) + T_let(k) <= S`
+also holds, so the sum is admissible. It is not adopted
+(`docs/benchmarks/sum-bound.md`: 0.14% to 0.33% fewer nodes). What is argued
+and what is tested is stated separately below.
+
+**Extra property of the cost table.** Besides the three minimum costs of
+section 1, the proof needs that a deletion that is not discounted costs at
+least `c_indel_min + c_min`, i.e. `indel >= indel_double + c_min`. For the
+current table `16 >= 8 + 8` holds with equality, so the sum is tight there. A
+table with, say, `indel = 12` and `indel_double = 8` would break it
+(dictionary `{"b"}`, query `"bxy"`, root cell `(0, 0)`: `T_comp = 16`,
+`T_let = 16` (x, y), sum 32, but the path b=b, delete x, delete y would cost
+12 + 12 = 24), while `max` would stay valid. With the current table that path
+costs 16 + 16 = 32, equal to the sum (tight). So a sum is not valid for every
+cost table and would have to be tied to a checked constant. `CostModel` has
+private fields; its constructors (`qwerty()`, `for_layout(..)`) all use the same
+scalar costs (only the neighbour table differs), so the sum is admissible for
+every layout, but not for arbitrary tables.
+
+**Claim.** Let `(i, j)` be the last cell that the optimal path of `t` visits in
+row `j` (Case A). Let `S` be the cost of the rest of the path, with `a`
+substitutions, `d` deletions, `e` insertions and `tau` transpositions, so that
+`r = a + d + 2 tau` and `s = a + e + 2 tau`, hence `d - e = r - s`. Let `G` be
+the gap and `C` the set of missing classes of section 3. Then
+`S >= c_indel_min * G + c_min * |C|`.
+
+*Proof (argued, not machine-checked).* Because `(i, j)` is the last cell of the
+path in row `j`, the first step out of it is not a deletion (a deletion stays
+in row `j`).
+
+*Picks.* For each class of `C` pick the lowest position `p >= i` whose query
+byte has that class. As in section 3, each picked byte is consumed by a
+substitution (of different bytes, cost `>= c_min`) or by a deletion, never by a
+transposition. Let `sp` and `dp` be the numbers of picked substitutions and
+deletions; `sp + dp = |C|`.
+
+*Discounts.* A deletion at `p` costs `>= 2 c_min = 16` unless `q[p] = q[p-1]`.
+If a picked `p` has `q[p] = q[p-1]`, then `p - 1` has the same class, so by the
+choice of the lowest position `p - 1 < i`, i.e. `p = i`. So at most one picked
+deletion (the one at `p = i`) is discounted. If it is, `q[i]` is the first
+query byte the tail consumes, yet the first step is not a deletion, so the
+first step is an insertion and `e >= 1`.
+
+*Gap.* If `G > 0` because `r < len_min - j`, then `G <= s - r = e - d <= e`;
+the `e` insertions cost `>= c_indel_min` each and the picks are other steps, so
+`S >= c_indel_min e + c_min |C| >= c_indel_min G + c_min |C|`. If `G > 0`
+because `r > len_max - j`, then `G <= r - s = d - e`. `S` is at least the sum
+of: the `sp` picked substitutions (`>= 8` each), the `d - dp` other deletions
+(`>= 8` each), the `e` insertions (`>= 8` each) and the `dp` picked deletions
+(`>= 16` each, or `8` for the one discounted deletion at `p = i`). Then
+`S - 8 (|C| + d - e) >= 16 e - 8 [discounted]`, which is `>= 0` because a
+discount implies `e >= 1`; with `G <= d - e` this is the claim. If `G = 0` the
+claim is `T_let <= S` of section 3. The first-byte factor `x1.5` only raises
+the costs used above, so it does not matter. ∎
+
+Case B (transposition skip) adds no signature term, so nothing changes there.
+Hence `LB_sum(v) <= cost(t)` for every within-budget `t` below `v`.
+
+**The last-cell condition is needed.** For a tail that starts with a deletion
+the claim is false: dictionary `{"a"}`, query `"aa"`, cell `(i, j) = (1, 1)`
+has `T_comp = T_let = 8`, but the doubled deletion costs 8. The node bound is
+not violated because the last cell of the path in row 1 is `(2, 1)`, where
+nothing is missing. `tests/sum_bound.rs` pins this. The node-level check is weak
+below the root: at depth >= 1 Case B caps the bound at `min(row j-1) + 12`,
+hiding most tail overestimates; the cell-level (last-in-row) check is what
+actually tests the proof.
+
+**Tested.** `tests/sum_bound.rs` re-implements the bound with full matrices
+(independent of the banded storage) and checks, for both `max` and the sum,
+that the bound of every prefix node never exceeds the oracle cost of the
+cheapest within-budget term below it, and, per cell, that `T_comp + T_let`
+never exceeds the true cost of a tail that does not start with a deletion.
+The default test runs a small exhaustive sweep. The ignored `sweep` test ran
+13,053,103 exhaustive cases (all dictionaries of up to 3 terms over the
+alphabets `as`, `ax` and `asx`, up to 2 over `asd`; all queries up to 4 to 5
+bytes; budgets 7, 15, 16, 24, 32, 48 and 64) and 160,000 random ones: no
+violation of either bound at node level, and none at cell level for tails that
+do not start with a deletion (for unrestricted tails there are violations, as
+above). With the sum patched into `lower_bound` (not committed), the unit test
+of 43,200 cases per mode, `tests/oracle.rs`, `tests/fuzz_like.rs` and the rest
+of `cargo test -p keyhammer` pass.
 
 **Class collisions only loosen the bound.** Classes are `b & 63`, so distinct
 bytes can share a class (for example `!` (33) and `a` (97)). The lowercase
@@ -375,8 +458,9 @@ Only argued here:
 - The best-first argument of section 5 (invariant, finality of the first
   terminal popped, termination, truncation). It is exercised indirectly by
   `tests/oracle.rs`, not checked step by step.
-- Whether a sum of the two signature terms would also be admissible (section
-  3): neither proved nor refuted; the implementation uses `max`.
+- The proof in section 3a that a sum of the two signature terms is admissible
+  under the current costs (the sweeps there are exhaustive only for tiny
+  alphabets and dictionaries); the implementation uses `max`.
 - That the theorem holds for other cost numbers: the proof uses only the
   minimum step costs `c_indel_min`, `c_transpose_min` and `c_min`, but only the
   current `CostModel::qwerty()` is tested.
