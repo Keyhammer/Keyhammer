@@ -18,6 +18,10 @@
 // - Wikipedia "Lists of common misspellings/For machines", revision 1199637275
 //   (2024-01-27), CC BY-SA 4.0.
 //
+// Holdout mode (`--holdout`, issue #43): additionally writes gtc-holdout.tsv (2000
+// pairs) and wiki-holdout.tsv (every remaining usable pair), disjoint from the
+// 1000-pair samples above (see docs/benchmarks/tiebreak-preregistration.md).
+//
 // Output: gtc.tsv and wiki.tsv, `typo TAB correct`, 1000 unique pairs each,
 // both words ^[a-z]+$, the correct word (at least 3 letters) in words-full.tsv,
 // the typo (at least 2 letters) not in it; shuffled with a fixed seed.
@@ -35,6 +39,9 @@ const DATA = path.resolve(arg("--data", path.join(HERE, "data")));
 const OUT = path.resolve(arg("--out", DATA));
 const SAMPLE = 1000;
 const SEED = 20260924;
+const HOLDOUT_SEED = 20260943; // different from SEED, fixed in advance (issue #43)
+const HOLDOUT_GTC = 2000;
+const HOLDOUT = process.argv.includes("--holdout");
 
 const SOURCES = {
   gtc: {
@@ -330,6 +337,27 @@ function sample(pairs, name) {
   if (sha !== EXPECTED[name]) {
     throw new Error(`${name}.tsv does not match the published sample: sha256 ${sha}, expected ${EXPECTED[name]} (is words-full.tsv from prepare-m0-data.mjs?)`);
   }
+  if (HOLDOUT) holdout(keys, new Set(picked), name);
+}
+
+// Disjoint holdout: usable pairs not in the 1000-pair sample and whose typo string
+// is not the typo of a sampled pair, in sorted order, shuffled with HOLDOUT_SEED.
+// gtc keeps HOLDOUT_GTC pairs; wiki keeps all that remain.
+const EXPECTED_HOLDOUT = {
+  gtc: "1508e677ef3d626a0bcd5317d8a7628a0950fe7f9a3b23f6bb213606078182c0",
+  wiki: "199b7eaabbf21570cd031c1294849fb31e6d00472efe968a2c2fb40549620701",
+};
+function holdout(keys, used, name) {
+  const usedTypos = new Set([...used].map((k) => k.split("\t")[0]));
+  const rest = keys.filter((k) => !used.has(k) && !usedTypos.has(k.split("\t")[0]));
+  s = HOLDOUT_SEED;
+  const shuffled = shuffle(rest);
+  const picked = name === "gtc" ? shuffled.slice(0, HOLDOUT_GTC) : shuffled;
+  const text = picked.join("\n") + "\n";
+  fs.writeFileSync(path.join(OUT, `${name}-holdout.tsv`), text);
+  const sha = crypto.createHash("sha256").update(text).digest("hex");
+  console.log(`${name}-holdout.tsv: ${picked.length} pairs from ${rest.length} unused usable pairs (sha256 ${sha})`);
+  if (sha !== EXPECTED_HOLDOUT[name]) throw new Error(`${name}-holdout.tsv does not match the pre-registered sample: sha256 ${sha}`);
 }
 
 fs.mkdirSync(OUT, { recursive: true });

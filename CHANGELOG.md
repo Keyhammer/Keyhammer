@@ -12,6 +12,10 @@ All notable changes to this project are documented here. The format follows
   TypeScript types, argument errors); tested by a CI job on ubuntu, macos and windows
   with Node 18 and 22. Nothing is published. The choice against a native addon is in
   `docs/design/node-binding.md`.
+- `bench/src/bin/tiebreak.rs` and `docs/benchmarks/tiebreak-{preregistration,result}.md`: a pre-registered
+  test of a ranking tie-break variant on disjoint typo samples (`fetch-typo-corpora.mjs --holdout`).
+  Verdict: do not adopt (+0.0030 MRR@10 at 274 137 words, but a significant loss on two error
+  categories); the default ranking is unchanged.
 - Fuzz targets (`crates/keyhammer/fuzz`, cargo-fuzz) for build and search
   robustness, brute-force oracle equality and `tsb` on/off equivalence, a
   weekly `fuzz` workflow, and a deterministic `tests/fuzz_like.rs` running the
