@@ -310,6 +310,90 @@ fn lower_bound(
     lb
 }
 
+/// The per-query inputs of one node expansion. [`Searcher::search`] computes
+/// every row, bound and terminal cost through it, and so do the unit tests
+/// that check the bound against a brute-force oracle.
+struct Expander<'a> {
+    trie: &'a Trie,
+    cm: &'a CostModel,
+    q: &'a [u8],
+    qmask: &'a [u64],
+    w: usize,
+    budget: Cost,
+    tsb: bool,
+}
+
+impl Expander<'_> {
+    /// The root row and the lower bound of the root.
+    fn root(&self) -> ([Cost; ROW], Cost) {
+        let cur = root_row(self.q, self.cm, self.w, self.budget);
+        let lb = lower_bound(
+            self.trie,
+            0,
+            0,
+            &cur,
+            &[INF; ROW],
+            self.q.len(),
+            self.w,
+            self.qmask,
+            self.cm,
+            self.tsb,
+        );
+        (cur, lb)
+    }
+
+    /// The id and exact cost of the term that ends at `v` (at `depth`, with
+    /// row `cur`), if there is one and its cost is within the budget.
+    fn terminal(&self, v: usize, depth: usize, cur: &[Cost; ROW]) -> Option<(u32, Cost)> {
+        let tid = self.trie.term_id(v);
+        if tid == NO_TERM {
+            return None;
+        }
+        let k = (self.q.len() + self.w).checked_sub(depth)?;
+        if k <= 2 * self.w && cur[k] <= self.budget {
+            Some((tid, cur[k]))
+        } else {
+            None
+        }
+    }
+
+    /// The row and the lower bound of child `c` of node `v`, where `v` is at
+    /// `depth` with row `cur` and its parent's row `prev`.
+    fn child(
+        &self,
+        v: usize,
+        depth: usize,
+        c: usize,
+        cur: &[Cost; ROW],
+        prev: &[Cost; ROW],
+    ) -> ([Cost; ROW], Cost) {
+        let row = child_row(
+            self.q,
+            self.cm,
+            self.w,
+            self.budget,
+            depth,
+            self.trie.label(v),
+            self.trie.label(c),
+            cur,
+            prev,
+        );
+        let lb = lower_bound(
+            self.trie,
+            c,
+            depth + 1,
+            &row,
+            cur,
+            self.q.len(),
+            self.w,
+            self.qmask,
+            self.cm,
+            self.tsb,
+        );
+        (row, lb)
+    }
+}
+
 /// A reusable search context. It keeps its priority queue and scratch buffers
 /// across queries; the returned [`Output`] is still allocated per query.
 #[derive(Default)]
@@ -393,21 +477,20 @@ impl Searcher {
         self.heap.clear();
         self.seq = 0;
 
-        let rank = |c: Cost| cfg.ranking.rank(c);
-        let root_cur = root_row(q, cm, w, cfg.budget);
-        let root_prev = [INF; ROW];
-        let lb = lower_bound(
+        // Moved out for the duration of the search so that the expander can
+        // borrow it while entries are pushed; put back below.
+        let qmask = core::mem::take(&mut self.qmask);
+        let ex = Expander {
             trie,
-            0,
-            0,
-            &root_cur,
-            &root_prev,
-            m,
-            w,
-            &self.qmask,
             cm,
-            cfg.tsb,
-        );
+            q,
+            qmask: &qmask,
+            w,
+            budget: cfg.budget,
+            tsb: cfg.tsb,
+        };
+        let rank = |c: Cost| cfg.ranking.rank(c);
+        let (root_cur, lb) = ex.root();
         if lb <= cfg.budget {
             self.push(
                 pack(rank(lb), trie.max_weight(0), 0),
@@ -416,7 +499,7 @@ impl Searcher {
                 0,
                 0,
                 root_cur,
-                root_prev,
+                [INF; ROW],
             );
         }
 
@@ -440,43 +523,13 @@ impl Searcher {
             let v = e.node as usize;
             let depth = usize::from(e.depth);
 
-            let tid = trie.term_id(v);
-            if tid != NO_TERM {
-                if let Some(k) = (m + w).checked_sub(depth) {
-                    if k <= 2 * w && e.cur[k] <= cfg.budget {
-                        let cost = e.cur[k];
-                        let key = pack(rank(cost), trie.weight(tid), tid);
-                        self.push(key, e.node, tid, cost, e.depth, [INF; ROW], [INF; ROW]);
-                    }
-                }
+            if let Some((tid, cost)) = ex.terminal(v, depth, &e.cur) {
+                let key = pack(rank(cost), trie.weight(tid), tid);
+                self.push(key, e.node, tid, cost, e.depth, [INF; ROW], [INF; ROW]);
             }
 
-            let parent_label = trie.label(v);
             for c in trie.children(v) {
-                let ch = trie.label(c);
-                let row = child_row(
-                    q,
-                    cm,
-                    w,
-                    cfg.budget,
-                    depth,
-                    parent_label,
-                    ch,
-                    &e.cur,
-                    &e.prev,
-                );
-                let lb = lower_bound(
-                    trie,
-                    c,
-                    depth + 1,
-                    &row,
-                    &e.cur,
-                    m,
-                    w,
-                    &self.qmask,
-                    cm,
-                    cfg.tsb,
-                );
+                let (row, lb) = ex.child(v, depth, c, &e.cur, &e.prev);
                 if lb <= cfg.budget {
                     self.push(
                         pack(rank(lb), trie.max_weight(c), 0),
@@ -490,7 +543,305 @@ impl Searcher {
                 }
             }
         }
+        self.qmask = qmask;
         out.stats.nodes_pushed = self.seq as usize;
         Ok(out)
+    }
+}
+
+/// Direct checks of [`lower_bound`] against a brute-force oracle.
+///
+/// For every node of random small tries (not only the nodes the search pops),
+/// the bound computed through [`Expander`] must not exceed the exact cost of
+/// any term at or below the node whose cost is within the budget, the node's
+/// queue key must not exceed the key of any such term under either
+/// [`Ranking`], and the cost read at a terminal must be the exact cost.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::String;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    /// Small deterministic xorshift generator.
+    struct Rng(u64);
+
+    impl Rng {
+        fn new(seed: u64) -> Self {
+            Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 % n as u64) as usize
+        }
+    }
+
+    /// Naive full-matrix weighted OSA cost, independent of the banded rows.
+    /// `d[j][i]` aligns the term prefix `t[..j]` with the query prefix `q[..i]`.
+    fn oracle(cm: &CostModel, q: &[u8], t: &[u8]) -> u32 {
+        const BIG: u32 = 1_000_000;
+        let (m, n) = (q.len(), t.len());
+        let mut d = vec![vec![BIG; m + 1]; n + 1];
+        d[0][0] = 0;
+        for j in 0..=n {
+            for i in 0..=m {
+                let mut best = d[j][i];
+                if i >= 1 && j >= 1 {
+                    best = best
+                        .min(d[j - 1][i - 1] + u32::from(cm.sub_cost(q[i - 1], t[j - 1], i - 1)));
+                }
+                if j >= 1 {
+                    let prev_t = if j >= 2 { Some(t[j - 2]) } else { None };
+                    best = best.min(d[j - 1][i] + u32::from(cm.ins_cost(t[j - 1], prev_t, i)));
+                }
+                if i >= 1 {
+                    best = best.min(d[j][i - 1] + u32::from(cm.del_cost(q, i - 1)));
+                }
+                if i >= 2
+                    && j >= 2
+                    && q[i - 1] == t[j - 2]
+                    && q[i - 2] == t[j - 1]
+                    && q[i - 1] != q[i - 2]
+                {
+                    best = best.min(d[j - 2][i - 2] + u32::from(cm.transpose_cost(i - 2)));
+                }
+                d[j][i] = best;
+            }
+        }
+        d[n][m]
+    }
+
+    fn random_word(rng: &mut Rng, alpha: &[u8], max_len: usize) -> Vec<u8> {
+        let len = 1 + rng.below(max_len);
+        (0..len).map(|_| alpha[rng.below(alpha.len())]).collect()
+    }
+
+    /// Up to `ops` random substitutions, insertions, deletions and swaps.
+    fn mutate(rng: &mut Rng, word: &[u8], alpha: &[u8], ops: usize) -> Vec<u8> {
+        let mut w = word.to_vec();
+        for _ in 0..ops {
+            let letter = alpha[rng.below(alpha.len())];
+            match rng.below(4) {
+                0 if !w.is_empty() => {
+                    let i = rng.below(w.len());
+                    w[i] = letter;
+                }
+                1 => {
+                    let i = rng.below(w.len() + 1);
+                    w.insert(i, letter);
+                }
+                2 if !w.is_empty() => {
+                    let i = rng.below(w.len());
+                    w.remove(i);
+                }
+                3 if w.len() > 1 => {
+                    let i = rng.below(w.len() - 1);
+                    w.swap(i, i + 1);
+                }
+                _ => {}
+            }
+        }
+        w
+    }
+
+    /// A dictionary of 1 to 24 entries of length 1 to 9 with duplicates,
+    /// prefix chains and extensions of earlier entries.
+    fn random_dictionary(rng: &mut Rng, alpha: &[u8]) -> Vec<(String, u16)> {
+        let size = 1 + rng.below(24);
+        let mut words: Vec<Vec<u8>> = Vec::new();
+        while words.len() < size {
+            let w = match (rng.below(6), words.len()) {
+                (0, n) if n > 0 => words[rng.below(n)].clone(),
+                (1, n) if n > 0 => {
+                    let base = &words[rng.below(n)];
+                    base[..1 + rng.below(base.len())].to_vec()
+                }
+                (2, n) if n > 0 => {
+                    let mut w = words[rng.below(n)].clone();
+                    for _ in 0..1 + rng.below(3) {
+                        if w.len() < 9 {
+                            w.push(alpha[rng.below(alpha.len())]);
+                        }
+                    }
+                    w
+                }
+                _ => random_word(rng, alpha, 9),
+            };
+            words.push(w);
+        }
+        words
+            .into_iter()
+            .map(|w| {
+                let weight = if rng.below(3) == 0 {
+                    100
+                } else {
+                    rng.below(65_536) as u16
+                };
+                (String::from_utf8(w).unwrap_or_default(), weight)
+            })
+            .collect()
+    }
+
+    #[derive(Default)]
+    struct Coverage {
+        instances: usize,
+        nodes: usize,
+        considered: usize,
+        bounded: usize,
+        terminals: usize,
+        terminals_within: usize,
+    }
+
+    /// Walks every node of `trie` for one query and checks the bound, the
+    /// keys and the terminal costs.
+    fn check_instance(
+        trie: &Trie,
+        cm: &CostModel,
+        q: &[u8],
+        budget: Cost,
+        tsb: bool,
+        cov: &mut Coverage,
+    ) {
+        let w = usize::from(budget / cm.c_indel_min());
+        let m = q.len();
+        let mut qmask = vec![0u64; m + 1];
+        for i in (0..m).rev() {
+            qmask[i] = qmask[i + 1] | class(q[i]);
+        }
+        let ex = Expander {
+            trie,
+            cm,
+            q,
+            qmask: &qmask,
+            w,
+            budget,
+            tsb,
+        };
+        let rankings = [Ranking::Coarse, Ranking::Exact];
+
+        // Exact cost of every term, and per node the smallest within-budget
+        // cost and the smallest term key at or below it. Children always have
+        // larger indices than their parent.
+        let costs: Vec<u32> = (0..trie.len() as u32)
+            .map(|id| oracle(cm, q, trie.term(id).as_bytes()))
+            .collect();
+        let n = trie.node_count();
+        let mut best = vec![u32::MAX; n];
+        let mut best_key = [vec![u64::MAX; n], vec![u64::MAX; n]];
+        for v in (0..n).rev() {
+            let tid = trie.term_id(v);
+            if tid != NO_TERM && costs[tid as usize] <= u32::from(budget) {
+                let c = costs[tid as usize] as Cost;
+                best[v] = u32::from(c);
+                for (r, keys) in rankings.iter().zip(best_key.iter_mut()) {
+                    keys[v] = pack(r.rank(c), trie.weight(tid), tid);
+                }
+            }
+            for c in trie.children(v) {
+                best[v] = best[v].min(best[c]);
+                for keys in &mut best_key {
+                    keys[v] = keys[v].min(keys[c]);
+                }
+            }
+        }
+
+        let check_node = |v: usize, lb: Cost| {
+            if best[v] != u32::MAX {
+                assert!(
+                    u32::from(lb) <= best[v],
+                    "bound {lb} above the cost {} of a term below node {v} \
+                     (query {q:?}, budget {budget}, tsb {tsb})",
+                    best[v],
+                );
+                for (r, keys) in rankings.iter().zip(best_key.iter()) {
+                    assert!(pack(r.rank(lb), trie.max_weight(v), 0) <= keys[v]);
+                }
+            }
+        };
+
+        cov.instances += 1;
+        let (root, lb) = ex.root();
+        check_node(0, lb);
+        cov.nodes += 1;
+        cov.considered += 1;
+        cov.bounded += usize::from(best[0] != u32::MAX);
+        // (node, depth, row, parent row, whether the search would push it)
+        let mut stack = vec![(0usize, 0usize, root, [INF; ROW], lb <= budget)];
+        while let Some((v, depth, cur, prev, pushed)) = stack.pop() {
+            let tid = trie.term_id(v);
+            if tid != NO_TERM {
+                let c = costs[tid as usize];
+                cov.terminals += 1;
+                if c <= u32::from(budget) {
+                    cov.terminals_within += 1;
+                    let want = Some((tid, c as Cost));
+                    assert_eq!(ex.terminal(v, depth, &cur), want, "query {q:?}");
+                } else {
+                    assert_eq!(ex.terminal(v, depth, &cur), None, "query {q:?}");
+                }
+            }
+            for c in trie.children(v) {
+                let (row, lb) = ex.child(v, depth, c, &cur, &prev);
+                check_node(c, lb);
+                cov.nodes += 1;
+                cov.considered += usize::from(pushed);
+                cov.bounded += usize::from(best[c] != u32::MAX);
+                stack.push((c, depth + 1, row, cur, pushed && lb <= budget));
+            }
+        }
+    }
+
+    fn check_mode(tsb: bool) -> Coverage {
+        // In the last alphabet '!' and '"' share the classes of 'a' and 'b'.
+        let alphabets: [&[u8]; 4] = [b"aqw", b"asdfqwer", b"abcdefghijklmnopqrstuvwxyz", b"ab!\""];
+        let cm = CostModel::qwerty();
+        let mut cov = Coverage::default();
+        for (a, alpha) in alphabets.iter().enumerate() {
+            for d in 0..150 {
+                let mut rng = Rng::new((a as u64 + 1) * 1000 + d);
+                let dict = random_dictionary(&mut rng, alpha);
+                let items: Vec<(&str, u16)> = dict.iter().map(|(s, w)| (s.as_str(), *w)).collect();
+                let trie = Trie::build(&items).unwrap_or_else(|e| panic!("{e}"));
+                for _ in 0..8 {
+                    let q = if rng.below(4) == 0 {
+                        let len = rng.below(11);
+                        (0..len).map(|_| alpha[rng.below(alpha.len())]).collect()
+                    } else {
+                        let base = dict[rng.below(dict.len())].0.as_bytes();
+                        let ops = rng.below(4);
+                        mutate(&mut rng, base, alpha, ops)
+                    };
+                    // Band half-widths W = 0, 2, 4 and 8.
+                    for budget in [7, 16, 32, 64] {
+                        check_instance(&trie, &cm, &q, budget, tsb, &mut cov);
+                    }
+                }
+            }
+        }
+        std::eprintln!(
+            "tsb {tsb}: {} instances, {} nodes checked ({} considered by the search, \
+             {} with a within-budget term below), {} terminals ({} within budget)",
+            cov.instances,
+            cov.nodes,
+            cov.considered,
+            cov.bounded,
+            cov.terminals,
+            cov.terminals_within,
+        );
+        cov
+    }
+
+    #[test]
+    fn lower_bound_never_exceeds_the_oracle_without_tsb() {
+        let cov = check_mode(false);
+        assert!(cov.bounded > 10_000 && cov.terminals_within > 1_000);
+    }
+
+    #[test]
+    fn lower_bound_never_exceeds_the_oracle_with_tsb() {
+        let cov = check_mode(true);
+        assert!(cov.bounded > 10_000 && cov.terminals_within > 1_000);
     }
 }
