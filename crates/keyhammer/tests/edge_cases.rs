@@ -674,3 +674,74 @@ fn prefix_node_limit_truncates_and_keeps_a_correct_head() {
     let got: Vec<_> = out.hits.iter().map(|h| (h.id, h.cost)).collect();
     assert_eq!(got[..], want[..got.len()]);
 }
+
+// ---- normalised text (issue #19) --------------------------------------------
+
+#[test]
+fn normalisation_limits_apply_to_the_normalised_text() {
+    use keyhammer::text::Normalizer;
+    use keyhammer::trie::BuildError;
+    let n = Normalizer::new();
+    // A term made only of combining marks normalises to nothing.
+    assert_eq!(
+        Trie::build_normalized(&[("ok", 1), ("\u{301}\u{302}", 1)], &n).unwrap_err(),
+        BuildError::EmptyTerm
+    );
+    // Case folding alone keeps the marks, so the term is not empty.
+    let case = Normalizer::new().with_diacritic_folding(false);
+    assert!(Trie::build_normalized(&[("\u{301}", 1)], &case).is_ok());
+    // İ is two bytes and folds to three (i + U+0307) without diacritic
+    // folding: 30000 of them are within the byte limit only before folding.
+    let long = "İ".repeat(30_000);
+    assert!(Trie::build(&[(long.as_str(), 1)]).is_ok());
+    assert_eq!(
+        Trie::build_normalized(&[(long.as_str(), 1)], &case).unwrap_err(),
+        BuildError::TermTooLong
+    );
+    // The query limit counts code points after normalisation: 50 ligatures
+    // are 150 letters.
+    let trie = Trie::build_normalized(&[("office", 1)], &n).unwrap();
+    let cm = CostModel::qwerty();
+    let cfg = SearchConfig::default();
+    let q = "ﬃ".repeat(50);
+    assert_eq!(
+        Searcher::new()
+            .search_text(&trie, &cm, &q, &cfg)
+            .unwrap_err(),
+        SearchError::QueryTooLong {
+            len: 150,
+            max: MAX_QUERY_LEN
+        }
+    );
+    assert!(
+        Searcher::new()
+            .search(&trie, &cm, q.as_bytes(), &cfg)
+            .is_ok()
+    );
+    // A query that normalises to nothing is the empty query.
+    let out = Searcher::new()
+        .search_prefix_text(&trie, &cm, "\u{301}", &cfg)
+        .unwrap();
+    assert_eq!(out.hits.len(), 1);
+    assert_eq!(out.hits[0].cost, 0);
+}
+
+#[test]
+fn invalid_utf8_queries_never_match_and_never_panic() {
+    let trie = Trie::build(&[("a", 1), ("\u{FFFD}", 1)]).unwrap();
+    let cm = CostModel::qwerty();
+    let cfg = SearchConfig {
+        k: 5,
+        ranking: Ranking::Exact,
+        ..SearchConfig::default()
+    };
+    let mut s = Searcher::new();
+    // 0xFF is not U+FFFD and not 'a': one substitution either way.
+    let out = s.search(&trie, &cm, b"\xff", &cfg).unwrap();
+    assert!(out.hits.iter().all(|h| h.cost == 24));
+    assert_eq!(out.hits.len(), 2);
+    // Two identical invalid bytes are a doubled letter: the second one is a
+    // cheap deletion (8 after the first position).
+    let out = s.search(&trie, &cm, b"a\xff\xff", &cfg).unwrap();
+    assert_eq!(out.hits[0].cost, 16 + 8);
+}

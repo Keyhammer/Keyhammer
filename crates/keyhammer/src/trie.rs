@@ -18,6 +18,7 @@ use core::fmt;
 use core::ops::Range;
 
 use crate::cost::symbol_class;
+use crate::text::Normalizer;
 
 /// Value of [`Trie::term_id`] for nodes where no term ends.
 pub const NO_TERM: u32 = u32::MAX;
@@ -28,9 +29,11 @@ pub const NO_TERM: u32 = u32::MAX;
 pub enum BuildError {
     /// No terms were given.
     Empty,
-    /// A term was the empty string.
+    /// A term was the empty string (for [`Trie::build_normalized`]: after
+    /// normalisation, as for a term made only of combining marks).
     EmptyTerm,
-    /// A term is longer than 65535 bytes.
+    /// A term is longer than 65535 bytes (for [`Trie::build_normalized`]:
+    /// after normalisation).
     TermTooLong,
     /// More than `u32::MAX` terms were given: term ids and input indices are
     /// `u32`, and `u32::MAX` itself is reserved for [`NO_TERM`].
@@ -97,6 +100,7 @@ pub struct Trie {
     len_min: Vec<u16>,
     len_max: Vec<u16>,
     below_mask: Vec<u64>,
+    normalizer: Option<Normalizer>,
 }
 
 impl Trie {
@@ -106,6 +110,10 @@ impl Trie {
     /// Term ids are positions in the byte-sorted, deduplicated list, not
     /// positions in `items`; [`Trie::input_index`] maps an id back to the
     /// index in `items` of the entry that was kept.
+    ///
+    /// Terms are stored as given, one symbol per code point, without any
+    /// folding: for ASCII this is the behaviour of earlier versions exactly.
+    /// [`Trie::build_normalized`] folds case and diacritics.
     pub fn build(items: &[(&str, u16)]) -> Result<Trie, BuildError> {
         if items.is_empty() {
             return Err(BuildError::Empty);
@@ -220,7 +228,50 @@ impl Trie {
             len_min,
             len_max,
             below_mask,
+            normalizer: None,
         })
+    }
+
+    /// Builds a trie of the terms normalised by `normalizer`, and remembers
+    /// it so that [`Searcher::search_text`](crate::search::Searcher::search_text)
+    /// normalises queries the same way.
+    ///
+    /// Terms that are equal after normalisation are merged as by
+    /// [`Trie::build`] (highest weight, then first); [`Trie::term`] returns the
+    /// normalised text and [`Trie::input_index`] the index in `items` of the
+    /// entry kept, from which the caller recovers its original spelling.
+    ///
+    /// ```
+    /// use keyhammer::text::Normalizer;
+    /// use keyhammer::trie::Trie;
+    ///
+    /// let items = [("Café", 5), ("cafe", 9), ("São Paulo", 1)];
+    /// let trie = Trie::build_normalized(&items, &Normalizer::new()).unwrap();
+    /// assert_eq!(trie.len(), 2);
+    /// assert_eq!(trie.term(0), "cafe");
+    /// assert_eq!(trie.input_index(0), 1); // "cafe" (weight 9) was kept
+    /// assert_eq!(trie.term(1), "sao paulo");
+    /// assert_eq!(trie.normalizer(), Some(Normalizer::new()));
+    /// ```
+    pub fn build_normalized(
+        items: &[(&str, u16)],
+        normalizer: &Normalizer,
+    ) -> Result<Trie, BuildError> {
+        let texts: Vec<String> = items.iter().map(|(t, _)| normalizer.normalize(t)).collect();
+        let normalized: Vec<(&str, u16)> = texts
+            .iter()
+            .zip(items)
+            .map(|(t, &(_, w))| (t.as_str(), w))
+            .collect();
+        let mut trie = Trie::build(&normalized)?;
+        trie.normalizer = Some(*normalizer);
+        Ok(trie)
+    }
+
+    /// The normaliser the trie was built with ([`Trie::build_normalized`]),
+    /// or `None` ([`Trie::build`]).
+    pub fn normalizer(&self) -> Option<Normalizer> {
+        self.normalizer
     }
 
     /// Number of distinct terms.

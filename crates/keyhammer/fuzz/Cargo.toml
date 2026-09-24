@@ -52,3 +52,10 @@ path = "fuzz_targets/normalize.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "text_oracle_equality"
+path = "fuzz_targets/text_oracle_equality.rs"
+test = false
+doc = false
+bench = false

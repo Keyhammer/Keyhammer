@@ -29,6 +29,7 @@
 //! UTF-8 byte; for ASCII the two are the same. See `docs/design/unicode.md`.
 
 use alloc::collections::BinaryHeap;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt;
@@ -186,7 +187,8 @@ pub struct Output {
 pub enum SearchError {
     /// The query is longer than [`MAX_QUERY_LEN`].
     QueryTooLong {
-        /// Query length in code points.
+        /// Query length in code points (for [`Searcher::search_text`], after
+        /// normalisation).
         len: usize,
         /// The limit.
         max: usize,
@@ -481,6 +483,8 @@ pub struct Searcher {
     qmask: Vec<u64>,
     /// The query as symbols (see `text::decode`).
     qsym: Vec<u32>,
+    /// The normalised query of `search_text`.
+    qtext: String,
     seq: u32,
 }
 
@@ -557,8 +561,9 @@ impl Searcher {
     ///
     /// `q` is UTF-8 and is compared per code point with the terms, as it is:
     /// it must already be in the form the terms are stored in (lowercase for
-    /// a dictionary of lowercase terms). A byte that is not part of valid
-    /// UTF-8 is a symbol of its own that matches no term.
+    /// a dictionary of lowercase terms). [`Searcher::search_text`] normalises
+    /// it for a trie built with [`Trie::build_normalized`]. A byte that is not
+    /// part of valid UTF-8 is a symbol of its own that matches no term.
     pub fn search(
         &mut self,
         trie: &Trie,
@@ -580,6 +585,86 @@ impl Searcher {
         }
         self.heap.clear();
         self.seq = 0;
+    }
+
+    /// Normalises `q` with the trie's normaliser, if it has one, and decodes
+    /// it into `self.qsym`; returns its length in symbols.
+    fn load_text(&mut self, trie: &Trie, q: &str) -> usize {
+        match trie.normalizer() {
+            Some(n) => {
+                let mut t = core::mem::take(&mut self.qtext);
+                n.normalize_into(q, &mut t);
+                let len = text::decode(t.as_bytes(), &mut self.qsym, MAX_QUERY_LEN);
+                self.qtext = t;
+                len
+            }
+            None => text::decode(q.as_bytes(), &mut self.qsym, MAX_QUERY_LEN),
+        }
+    }
+
+    /// [`Searcher::search`] for text: `q` is normalised with the normaliser
+    /// of `trie` ([`Trie::build_normalized`]) first, so terms and queries are
+    /// folded identically. For a trie built with [`Trie::build`] this is
+    /// `search(trie, cm, q.as_bytes(), cfg)`. [`MAX_QUERY_LEN`] applies to the
+    /// normalised query.
+    ///
+    /// ```
+    /// use keyhammer::cost::CostModel;
+    /// use keyhammer::search::{SearchConfig, Searcher};
+    /// use keyhammer::text::Normalizer;
+    /// use keyhammer::trie::Trie;
+    ///
+    /// let items = [("São Paulo", 10), ("Straße", 5), ("Crème brûlée", 7)];
+    /// let trie = Trie::build_normalized(&items, &Normalizer::new()).unwrap();
+    /// let mut s = Searcher::new();
+    /// let cm = CostModel::qwerty();
+    /// let cfg = SearchConfig::default();
+    /// let first = |s: &mut Searcher, q: &str| {
+    ///     let out = s.search_text(&trie, &cm, q, &cfg).unwrap();
+    ///     (trie.input_index(out.hits[0].id), out.hits[0].cost)
+    /// };
+    /// assert_eq!(first(&mut s, "SAO PAULO"), (0, 0));
+    /// assert_eq!(first(&mut s, "strasse"), (1, 0));
+    /// assert_eq!(first(&mut s, "creme brulee"), (2, 0));
+    /// assert_eq!(first(&mut s, "sao paolo"), (0, 16)); // one typo
+    /// ```
+    pub fn search_text(
+        &mut self,
+        trie: &Trie,
+        cm: &CostModel,
+        q: &str,
+        cfg: &SearchConfig,
+    ) -> Result<Output, SearchError> {
+        let len = self.load_text(trie, q);
+        self.run(trie, cm, len, cfg)
+    }
+
+    /// [`Searcher::search_prefix`] for text, with the query normalised as by
+    /// [`Searcher::search_text`].
+    ///
+    /// ```
+    /// use keyhammer::cost::CostModel;
+    /// use keyhammer::search::{SearchConfig, Searcher};
+    /// use keyhammer::text::Normalizer;
+    /// use keyhammer::trie::Trie;
+    ///
+    /// let items = [("Ação", 10), ("Acapulco", 5)];
+    /// let trie = Trie::build_normalized(&items, &Normalizer::new()).unwrap();
+    /// let out = Searcher::new()
+    ///     .search_prefix_text(&trie, &CostModel::qwerty(), "AÇÃ", &SearchConfig::default())
+    ///     .unwrap();
+    /// assert_eq!(trie.term(out.hits[0].id), "acao");
+    /// assert_eq!(out.hits[0].cost, 0);
+    /// ```
+    pub fn search_prefix_text(
+        &mut self,
+        trie: &Trie,
+        cm: &CostModel,
+        q: &str,
+        cfg: &SearchConfig,
+    ) -> Result<Output, SearchError> {
+        let len = self.load_text(trie, q);
+        self.run_prefix(trie, cm, len, cfg)
     }
 
     /// [`Searcher::search`] on the `len` symbols in `self.qsym`.

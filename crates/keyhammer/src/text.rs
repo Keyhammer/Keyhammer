@@ -4,8 +4,10 @@
 //! Text normalisation: case folding and diacritic folding with tables of our
 //! own, and the offset utilities needed to report ranges in the caller's text.
 //!
-//! [`Normalizer`] maps a `&str` to the form the index stores; apply the same
-//! normaliser to terms and queries.
+//! [`Normalizer`] maps a `&str` to the form the index stores. Build the trie
+//! with [`Trie::build_normalized`](crate::trie::Trie::build_normalized) and
+//! search with [`Searcher::search_text`](crate::search::Searcher::search_text)
+//! so that terms and queries go through the same function.
 //!
 //! What is folded, and what is not, is fixed in `docs/design/unicode.md`
 //! (section 2). In short, the default normaliser:

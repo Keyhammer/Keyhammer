@@ -226,3 +226,21 @@ fn tricky(rng: &mut Rng) -> Vec<u8> {
 fn normalize_is_idempotent_and_maps_stay_in_range() {
     run(5, 4_000, tricky, fuzz_props::normalize);
 }
+
+/// The structured oracle input with its letters shifted, so that over many
+/// calls every character of the text alphabet occurs.
+fn structured_text(rng: &mut Rng) -> Vec<u8> {
+    let shift = rng.below(16) as u8;
+    let mut d = structured(rng, 20);
+    for b in d.iter_mut().skip(4) {
+        if *b != 0xFF {
+            *b = b.wrapping_add(shift);
+        }
+    }
+    d
+}
+
+#[test]
+fn text_matches_the_oracle() {
+    run(6, 3_000, structured_text, fuzz_props::text_oracle_equality);
+}

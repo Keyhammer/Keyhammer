@@ -7,6 +7,7 @@ mod support;
 
 use keyhammer::cost::{CostModel, Layout};
 use keyhammer::search::{Ranking, SearchConfig, Searcher};
+use keyhammer::text::Normalizer;
 use keyhammer::trie::Trie;
 use support::{Rng, oracle_topk, oracle_topk_prefix};
 
@@ -671,4 +672,171 @@ fn a_code_point_is_one_symbol() {
         s.search(&trie, &cm, longer.as_bytes(), &cfg).unwrap_err(),
         keyhammer::search::SearchError::QueryTooLong { len: 129, max: 128 }
     );
+}
+
+// ---- normalised dictionaries ------------------------------------------------
+
+/// Raw text with uppercase, precomposed and combining accents, ligatures and
+/// the special foldings, so that many raw strings normalise to one term.
+const RAW: &str = "aAáÁeEéÉ\u{301}cCçÇsßæÆœİıiIжЖ😀ﬁ";
+
+fn normalizers() -> [Normalizer; 3] {
+    [
+        Normalizer::new(),
+        Normalizer::new().with_diacritic_folding(false),
+        Normalizer::new().with_case_folding(false),
+    ]
+}
+
+/// `search_text` and `search_prefix_text` on a trie built with
+/// `build_normalized` against the brute-force oracle run on the normalised
+/// query and the normalised terms.
+fn check_normalized(n: Normalizer, layout: Layout, seed: u64, dict_size: usize) {
+    let alpha: Vec<char> = RAW.chars().collect();
+    let mut rng = Rng::new(seed);
+    let words: Vec<String> = (0..dict_size)
+        .map(|_| {
+            let mut w: String = text_word(&mut rng, &alpha).into_iter().collect();
+            // A leading letter, so that no term normalises to nothing.
+            w.insert(0, alpha[rng.below(8) as usize]);
+            w
+        })
+        .collect();
+    let items: Vec<(&str, u16)> = words
+        .iter()
+        .map(|w| (w.as_str(), rng.below(4) as u16 * 100))
+        .collect();
+    let trie = Trie::build_normalized(&items, &n).unwrap();
+    assert_eq!(trie.normalizer(), Some(n));
+    // Every term is the normalised text of the entry it was kept from, and
+    // that entry has the highest weight among those with the same text.
+    for id in 0..trie.len() as u32 {
+        let kept = trie.input_index(id) as usize;
+        assert_eq!(trie.term(id), n.normalize(words[kept].as_str()));
+        for (i, w) in words.iter().enumerate() {
+            if n.normalize(w) == trie.term(id) {
+                assert!(items[i].1 < items[kept].1 || (items[i].1 == items[kept].1 && i >= kept));
+            }
+        }
+    }
+    let cm = CostModel::for_layout(layout);
+    let mut searcher = Searcher::new();
+    for _ in 0..25 {
+        let q: String = if rng.below(4) == 0 {
+            text_word(&mut rng, &alpha).into_iter().collect()
+        } else {
+            let base: Vec<char> = words[rng.below(dict_size as u64) as usize]
+                .chars()
+                .collect();
+            let cut = 1 + rng.below(base.len() as u64) as usize;
+            let ops = rng.below(3) as usize;
+            text_mutate(&mut rng, &base[..cut], &alpha, ops)
+                .into_iter()
+                .collect()
+        };
+        let nq = n.normalize(&q);
+        for (k, budget) in [(1usize, 16u16), (5, 32), (10, 64)] {
+            for tsb in [false, true] {
+                for ranking in [Ranking::Coarse, Ranking::Exact] {
+                    let cfg = SearchConfig {
+                        k,
+                        budget,
+                        tsb,
+                        ranking,
+                        ..SearchConfig::default()
+                    };
+                    let hits = |out: keyhammer::search::Output| -> Vec<(u32, u16)> {
+                        out.hits.iter().map(|h| (h.id, h.cost)).collect()
+                    };
+                    let ctx = format!("{n:?} seed={seed} q={q:?} k={k} budget={budget} tsb={tsb}");
+                    let got = hits(searcher.search_text(&trie, &cm, &q, &cfg).unwrap());
+                    let want = oracle_topk(&trie, &cm, nq.as_bytes(), budget, k, ranking);
+                    assert_eq!(got, want, "exact {ctx}");
+                    let got = hits(searcher.search_prefix_text(&trie, &cm, &q, &cfg).unwrap());
+                    let want = oracle_topk_prefix(&trie, &cm, nq.as_bytes(), budget, k, ranking);
+                    assert_eq!(got, want, "prefix {ctx}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn normalized_text_matches_the_oracle() {
+    for (i, n) in normalizers().into_iter().enumerate() {
+        for seed in 0..3 {
+            let layout = Layout::ALL[(i * 3 + seed as usize) % Layout::ALL.len()];
+            check_normalized(n, layout, 950 + 10 * i as u64 + seed, 150);
+        }
+    }
+}
+
+#[test]
+fn normalized_search_ignores_case_and_accents() {
+    let items = [
+        ("São Paulo", 10),
+        ("Sao Paulo", 3),
+        ("naïve", 1),
+        ("Straße", 5),
+        ("Ærø", 2),
+        ("ﬁnale", 4),
+        ("İzmir", 6),
+        ("Ürümqi", 1),
+    ];
+    let trie = Trie::build_normalized(&items, &Normalizer::new()).unwrap();
+    assert_eq!(trie.len(), 7); // the two São Paulo spellings merged
+    let cm = CostModel::qwerty();
+    let mut s = Searcher::new();
+    let cfg = SearchConfig::default();
+    for (q, want) in [
+        ("sao paulo", 0usize),
+        ("SÃO PAULO", 0),
+        ("sa\u{303}o paulo", 0),
+        ("naive", 2),
+        ("NAÏVE", 2),
+        ("strasse", 3),
+        ("STRASSE", 3),
+        ("aero", 4),
+        ("finale", 5),
+        ("izmir", 6),
+        ("urumqi", 7),
+    ] {
+        let out = s.search_text(&trie, &cm, q, &cfg).unwrap();
+        let first = out.hits[0];
+        assert_eq!(
+            (trie.input_index(first.id) as usize, first.cost),
+            (want, 0),
+            "{q}"
+        );
+    }
+    // Without the normaliser the same query does not match exactly.
+    let raw = Trie::build(&items).unwrap();
+    let out = s.search_text(&raw, &cm, "sao paulo", &cfg).unwrap();
+    assert!(out.hits.iter().all(|h| h.cost > 0));
+}
+
+#[test]
+fn case_only_normalisation_keeps_accents_and_uses_abnt2_c_cedilla() {
+    let n = Normalizer::new().with_diacritic_folding(false);
+    let trie = Trie::build_normalized(&[("Ação", 1), ("Acao", 1), ("Alão", 1)], &n).unwrap();
+    assert_eq!(trie.len(), 3);
+    let mut s = Searcher::new();
+    let cfg = SearchConfig {
+        ranking: Ranking::Exact,
+        ..SearchConfig::default()
+    };
+    let cost = |s: &mut Searcher, layout: Layout, q: &str, term: &str| {
+        let out = s
+            .search_text(&trie, &CostModel::for_layout(layout), q, &cfg)
+            .unwrap();
+        out.hits
+            .iter()
+            .find(|h| trie.term(h.id) == term)
+            .map(|h| h.cost)
+    };
+    assert_eq!(cost(&mut s, Layout::Abnt2, "AÇÃO", "ação"), Some(0));
+    // l typed for ç: neighbouring keys on ABNT2 only.
+    assert_eq!(cost(&mut s, Layout::Abnt2, "alão", "ação"), Some(8));
+    assert_eq!(cost(&mut s, Layout::Qwerty, "alão", "ação"), Some(16));
+    assert_eq!(cost(&mut s, Layout::Abnt2, "ação", "acao"), Some(32));
 }
