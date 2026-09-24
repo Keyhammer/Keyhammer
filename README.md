@@ -141,7 +141,9 @@ cargo run --release -p keyhammer-bench --bin m0 -- bench/data
 Competitive benchmarks: [`docs/benchmarks/competitors.md`](docs/benchmarks/competitors.md)
 (Rust libraries, harness in `bench/competitors`) and
 [`docs/benchmarks/competitors-js.md`](docs/benchmarks/competitors-js.md) (the WebAssembly build
-against JavaScript libraries, harness in `bench/js-competitors`).
+against JavaScript libraries, harness in `bench/js-competitors`). A corpus of real typing
+errors and a first measurement of the keyboard costs on it:
+[`docs/benchmarks/finger-slips.md`](docs/benchmarks/finger-slips.md).
 
 The old JS spike comparison (`node compare.mjs` in `bench/`, after `npm install` and
 `node fetch-data.mjs`) loads the Node package, so build its module first with
