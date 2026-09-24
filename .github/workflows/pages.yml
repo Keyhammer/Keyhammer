@@ -65,9 +65,15 @@ jobs:
 
       # The demo page (website/src/pages/demo.js) loads this module at run
       # time; it is not committed, so it is built, tested and copied here.
+      # The module is served publicly: panic locations would otherwise embed
+      # build-machine paths, so they are remapped for this build only
+      # (RUSTFLAGS is set in this step, not for the native builds).
       - name: Build and test the WebAssembly module
         run: |
-          cargo build -p keyhammer-wasm --target wasm32-unknown-unknown --profile wasm
+          remap="--remap-path-prefix=${GITHUB_WORKSPACE}=/src"
+          remap="$remap --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+          remap="$remap --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
+          RUSTFLAGS="$remap" cargo build -p keyhammer-wasm --target wasm32-unknown-unknown --profile wasm
           node bindings/wasm/test.mjs
           mkdir -p website/static/wasm
           cp target/wasm32-unknown-unknown/wasm/keyhammer_wasm.wasm website/static/wasm/keyhammer.wasm

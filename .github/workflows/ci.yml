@@ -61,5 +61,11 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt -p keyhammer-wasm -- --check
       - run: cargo clippy -p keyhammer-wasm --target wasm32-unknown-unknown -- -D warnings
-      - run: cargo build -p keyhammer-wasm --target wasm32-unknown-unknown --profile wasm
+      # Same path remapping as the Pages build; the test fails if the module
+      # still contains a build-machine path.
+      - run: |
+          remap="--remap-path-prefix=${GITHUB_WORKSPACE}=/src"
+          remap="$remap --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+          remap="$remap --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
+          RUSTFLAGS="$remap" cargo build -p keyhammer-wasm --target wasm32-unknown-unknown --profile wasm
       - run: node bindings/wasm/test.mjs
