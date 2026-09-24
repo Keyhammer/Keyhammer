@@ -66,3 +66,10 @@ path = "fuzz_targets/highlight.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "index_from_bytes"
+path = "fuzz_targets/index_from_bytes.rs"
+test = false
+doc = false
+bench = false

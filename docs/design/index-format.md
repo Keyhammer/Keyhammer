@@ -163,9 +163,10 @@ so no input can make the loader panic, overflow or allocate.
 7. Reserved header bytes are zero (`NonZeroReserved`); the normaliser fields are zero without
    the flag; with it, the mode byte uses bits 0 and 1 only (`BadNormalizer`) and the algorithm
    and Unicode versions equal this crate's (`NormalizerMismatch`).
-8. The counts are within section 3's limits (`BadCounts`), and every table entry equals the
-   one the counts imply (`BadSectionTable`); the padding after each section is zero
-   (`NonZeroReserved`).
+8. The section count is 11 (`SectionCount`), the counts are within section 3's limits
+   (`BadCounts`), every table entry equals the one the counts imply (`BadSectionTable`), the
+   length the counts imply is the file's (`BadCounts`), and the padding after each section is
+   zero (`NonZeroReserved`).
 
 ### 5.2 Tree
 
@@ -268,7 +269,11 @@ crate-private trait; the public `Searcher` methods instantiate it for `Trie` onl
 path is the same monomorphic code as before and its node counts, results and costs are
 unchanged (the existing regression tests pin them). The view pays a bounds check and a
 little-endian decode per read, and four bytes per label; `docs/benchmarks/index-format.md`
-measures the file size, the load (validation) time and the search cost on the view.
+measures the file size, the load (validation) time and the search cost on the view. In short,
+on 274 137 words (one shared machine): the file is 21.0 MB, about 19% below the estimated heap
+of the trie; validation takes about 32 ms against about 70 ms for a rebuild; search on the view
+returns the same hits and work counters, and its latency was within about 3% of the owned
+trie's.
 
 The alternative, a public trait so that `Searcher::search` accepts either type, was rejected
 for now: it changes the signatures of four public methods (a caller passing a `&&Trie` or an

@@ -37,7 +37,7 @@ use core::fmt;
 use crate::cost::{Cost, CostModel, INF, symbol_class, whole_units};
 use crate::highlight::{self, Highlight, HighlightError, HighlightMode};
 use crate::text;
-use crate::trie::{NO_TERM, Trie};
+use crate::trie::{NO_TERM, Nodes, Trie};
 
 /// Longest accepted query, in symbols (code points; bytes for ASCII).
 pub const MAX_QUERY_LEN: usize = 128;
@@ -419,8 +419,8 @@ fn child_row(
 /// raised by what the query suffix still has to pay given the letters and the
 /// lengths present below the node.
 #[allow(clippy::too_many_arguments)]
-fn lower_bound(
-    trie: &Trie,
+fn lower_bound<T: Nodes + ?Sized>(
+    trie: &T,
     node: usize,
     depth: usize,
     cur: &[Cost; ROW],
@@ -470,8 +470,8 @@ fn lower_bound(
 /// The per-query inputs of one node expansion. [`Searcher::search`] computes
 /// every row, bound and terminal cost through it, and so do the unit tests
 /// that check the bound against a brute-force oracle.
-struct Expander<'a> {
-    trie: &'a Trie,
+struct Expander<'a, T: ?Sized> {
+    trie: &'a T,
     cm: &'a CostModel,
     q: &'a [u32],
     qmask: &'a [u64],
@@ -481,7 +481,7 @@ struct Expander<'a> {
     prefix: bool,
 }
 
-impl Expander<'_> {
+impl<T: Nodes + ?Sized> Expander<'_, T> {
     /// Prefix mode: the cost of aligning the whole query with the term prefix
     /// that ends at this node (depth `depth`, row `cur`), or `INF`.
     fn prefix_cell(&self, depth: usize, cur: &[Cost; ROW]) -> Cost {
@@ -665,6 +665,43 @@ impl Searcher {
         self.run(trie, cm, len, cfg)
     }
 
+    /// [`Searcher::search`] or, with `prefix`, [`Searcher::search_prefix`] on
+    /// any node source (a [`Trie`] or a validated
+    /// [`Index`](crate::index::Index) view).
+    pub(crate) fn search_in<T: Nodes + ?Sized>(
+        &mut self,
+        trie: &T,
+        cm: &CostModel,
+        q: &[u8],
+        cfg: &SearchConfig,
+        prefix: bool,
+    ) -> Result<Output, SearchError> {
+        let len = text::decode(q, &mut self.qsym, MAX_QUERY_LEN);
+        if prefix {
+            self.run_prefix(trie, cm, len, cfg)
+        } else {
+            self.run(trie, cm, len, cfg)
+        }
+    }
+
+    /// [`Searcher::search_text`] or, with `prefix`,
+    /// [`Searcher::search_prefix_text`] on any node source.
+    pub(crate) fn search_text_in<T: Nodes + ?Sized>(
+        &mut self,
+        trie: &T,
+        cm: &CostModel,
+        q: &str,
+        cfg: &SearchConfig,
+        prefix: bool,
+    ) -> Result<Output, SearchError> {
+        let len = self.load_text(trie, q);
+        if prefix {
+            self.run_prefix(trie, cm, len, cfg)
+        } else {
+            self.run(trie, cm, len, cfg)
+        }
+    }
+
     /// Fills the per-query masks from `q` and resets the queue.
     fn prepare(&mut self, q: &[u32]) {
         let m = q.len();
@@ -679,7 +716,7 @@ impl Searcher {
 
     /// Normalises `q` with the trie's normaliser, if it has one, and decodes
     /// it into `self.qsym`; returns its length in symbols.
-    fn load_text(&mut self, trie: &Trie, q: &str) -> usize {
+    fn load_text<T: Nodes + ?Sized>(&mut self, trie: &T, q: &str) -> usize {
         match trie.normalizer() {
             Some(n) => {
                 let mut t = core::mem::take(&mut self.qtext);
@@ -905,9 +942,9 @@ impl Searcher {
     }
 
     /// [`Searcher::search`] on the `len` symbols in `self.qsym`.
-    fn run(
+    fn run<T: Nodes + ?Sized>(
         &mut self,
-        trie: &Trie,
+        trie: &T,
         cm: &CostModel,
         len: usize,
         cfg: &SearchConfig,
@@ -1045,9 +1082,9 @@ impl Searcher {
     }
 
     /// [`Searcher::search_prefix`] on the `len` symbols in `self.qsym`.
-    fn run_prefix(
+    fn run_prefix<T: Nodes + ?Sized>(
         &mut self,
-        trie: &Trie,
+        trie: &T,
         cm: &CostModel,
         len: usize,
         cfg: &SearchConfig,

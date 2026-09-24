@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [never_panics, oracle_equality, tsb_equivalence, prefix_oracle_equality, normalize, text_oracle_equality, highlight]
+        target: [never_panics, oracle_equality, tsb_equivalence, prefix_oracle_equality, normalize, text_oracle_equality, highlight, index_from_bytes]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly

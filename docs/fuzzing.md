@@ -14,6 +14,7 @@ its CI need neither nightly nor libFuzzer.
 | `normalize` | `text::Normalizer` on any `&str` (combining marks, joiners, bidirectional marks, emoji, NUL included), in all four modes, never panics, is deterministic and idempotent, and its source map stays monotone and in range and converts to valid byte and UTF-16 ranges. |
 | `text_oracle_equality` | On a trie built with `Trie::build_normalized` (one of the four normaliser modes) from text with case pairs, precomposed and combining accents, `ß`, `æ`, Cyrillic and an emoji, `search_text` and `search_prefix_text` equal the brute-force references run on the normalised query, for `tsb` on and off and both rankings. |
 | `highlight` | For every hit of `search_text` and `search_prefix_text` on the text of `text_oracle_equality`, `highlight_text` in the matching mode succeeds, its cost equals `Hit::cost` and the brute-force cost, and its ranges are valid, agreeing code-point, UTF-8 and UTF-16 ranges of the original term (sorted, disjoint, inside `aligned`). On arbitrary bytes, highlighting a made-up hit with any query and source string returns `Ok` or `Err` and never panics. |
+| `index_from_bytes` | `Index::from_bytes` on arbitrary bytes, and on indexes written by `Trie::to_bytes` (plain or normalised) then mutated at arbitrary positions, with or without the CRC recomputed, never panics; an unmutated index loads; an accepted index gives the same results on the view, on `to_trie` and on a trie rebuilt from its own terms, weights and normaliser (both modes, both rankings, `tsb` on and off, plain and text search), and `to_trie().to_bytes()` gives its bytes back (`docs/design/index-format.md`, section 6). |
 
 Input layouts are documented in `crates/keyhammer/tests/fuzz_props/mod.rs`, which
 holds the properties themselves.
@@ -30,6 +31,7 @@ cargo +nightly fuzz run prefix_oracle_equality
 cargo +nightly fuzz run normalize
 cargo +nightly fuzz run text_oracle_equality
 cargo +nightly fuzz run highlight
+cargo +nightly fuzz run index_from_bytes
 ```
 
 libFuzzer works best on Linux and macOS; on Windows use WSL. Corpora and crash
@@ -52,7 +54,9 @@ text_oracle_equality 3 000 calls, 2 860 build a trie and search, 2 388 have at
 least one hit within the budget (QWERTY, coarse ranking), 2 300 have non-ASCII
 text in the normalised query or a term; highlight 3 000 calls highlight 17 426
 hits (9 548 of them prefix hits, 2 943 with more than one range) and 107 made-up
-hits on raw input that happen to be consistent. It
+hits on raw input that happen to be consistent; index_from_bytes 3 000 calls, 121 raw inputs (all rejected), 2 818
+write an index, 982 of them unmutated (all loaded), 14 mutated and accepted after the CRC
+fix (all consistent), 1 822 mutated and rejected, by at least 17 different error variants. It
 catches these mutations of the core: dropping the transposition term in
 `lower_bound`, an under-counting `tsb` bound, and wrong `len_min`, `len_max` or
 `below_mask` trie metadata. It is a regression net, not a substitute for coverage-guided fuzzing.

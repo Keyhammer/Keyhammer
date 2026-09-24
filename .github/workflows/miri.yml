@@ -35,7 +35,8 @@ jobs:
       # suite timed out) and add nothing for undefined behaviour, since the
       # same code paths run in the other tests (a_term_of_* build 65535-byte
       # terms, also very slow under Miri; ascii_results_* runs thousands of
-      # searches to pin the ASCII results). They are skipped by name here
+      # searches to pin the ASCII results; every_byte_flip_* and round_trip_on_random_*
+      # load hundreds of mutated indexes and search each). They are skipped by name here
       # (no source changes) and still run in the normal `test` job. Locally this
       # takes a few minutes (tests/fuzz_like.rs already scales itself under Miri).
       - run: >
@@ -53,6 +54,8 @@ jobs:
           --skip normalisation_limits_apply
           --skip every_layout_has_a_symmetric
           --skip the_default_enables_the_bound
+          --skip every_byte_flip
+          --skip round_trip_on_random
       # The C ABI crate holds unsafe code (raw pointers from C); its tests are
       # small, so all of them run.
       - run: cargo miri test -p keyhammer-c
