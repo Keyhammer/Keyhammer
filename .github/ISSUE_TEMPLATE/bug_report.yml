@@ -1,0 +1,35 @@
+name: Bug report
+description: Something returns a wrong result, panics or misbehaves
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do not use this form for security problems; use the private advisory link on the issue chooser instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you got, and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest dictionary and query that show the problem, and the search settings (budget, k, tsb).
+      render: rust
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "0.1.0 or a commit hash"
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Rust version, and target (native or wasm).

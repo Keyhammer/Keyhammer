@@ -1,0 +1,54 @@
+# Drafts the next release notes from merged pull requests (release-drafter v7).
+# Publishing a release stays a manual step.
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+change-template: "- $TITLE (#$NUMBER)"
+change-title-escapes: '\<*_&#@'
+categories:
+  - type: "pre-exclude"
+    when:
+      label: "skip-changelog"
+  - title: "Breaking changes"
+    semver-increment: major
+    when:
+      label: "breaking-change"
+  - title: "Features"
+    semver-increment: minor
+    when:
+      label: "enhancement"
+  - title: "Fixes"
+    when:
+      label: "bug"
+  - title: "Performance"
+    when:
+      label: "performance"
+  - title: "Documentation"
+    when:
+      label: "documentation"
+  - title: "Maintenance"
+    when:
+      labels: ["chore", "ci", "refactor", "test", "dependencies"]
+# Type labels come from the Conventional Commits prefix of the pull request title.
+autolabeler:
+  - label: "breaking-change"
+    title: ['/^[a-z]+(\(.+\))?!:/i']
+  - label: "enhancement"
+    title: ['/^feat(\(.+\))?!?:/i']
+  - label: "bug"
+    title: ['/^fix(\(.+\))?!?:/i']
+  - label: "documentation"
+    title: ['/^docs(\(.+\))?!?:/i']
+  - label: "performance"
+    title: ['/^perf(\(.+\))?!?:/i']
+  - label: "refactor"
+    title: ['/^refactor(\(.+\))?!?:/i']
+  - label: "test"
+    title: ['/^test(\(.+\))?!?:/i']
+  - label: "ci"
+    title: ['/^(ci|build)(\(.+\))?!?:/i']
+  - label: "chore"
+    title: ['/^chore(\(.+\))?!?:/i']
+template: |
+  ## What changed
+
+  $CHANGES
