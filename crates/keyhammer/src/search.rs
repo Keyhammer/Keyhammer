@@ -14,8 +14,11 @@
 //! ([`Ranking::Coarse`]) terms are ranked by the weighted cost rounded up to
 //! whole units of 16 ([`whole_units`]), then by higher weight, then by lower
 //! term id, so the weight decides between terms whose costs round to the same
-//! number of units. This is not a count of edits: an edit on the first byte
-//! counts as two units and two cheap edits (8 + 8) count as one.
+//! number of units. This is not a count of edits: the x1.5 factor on the
+//! first byte makes an ordinary (non-neighbouring-key) edit there cost 24,
+//! i.e. two units, while a neighbouring-key substitution there costs 12 (one
+//! unit) and a transposition 18 (two units); two cheap edits (8 + 8) count as
+//! one.
 //! [`Ranking::Exact`] ranks by the exact weighted cost instead, then weight,
 //! then id. In both modes [`Hit::cost`] is the exact weighted cost.
 
@@ -39,8 +42,10 @@ pub enum Ranking {
     /// By the weighted cost rounded up to whole units of 16
     /// ([`whole_units`]), then higher weight, then lower term id. Terms whose
     /// costs round to the same number of units are ordered by weight. This is
-    /// not a count of edits: any edit on the first byte (24 or more) counts as
-    /// two units, and two cheap edits (8 + 8) count as one.
+    /// not a count of edits: the x1.5 factor on the first byte makes an
+    /// ordinary (non-neighbouring-key) edit there cost 24, i.e. two units,
+    /// while a neighbouring-key substitution there costs 12 (one unit) and a
+    /// transposition 18 (two units); two cheap edits (8 + 8) count as one.
     #[default]
     Coarse,
     /// By the exact weighted cost, then higher weight, then lower term id.
