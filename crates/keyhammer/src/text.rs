@@ -400,8 +400,9 @@ mod tests {
     ];
 
     fn all_chars() -> impl Iterator<Item = char> {
-        // Under Miri only a sample: every 97th scalar value plus the tables.
-        let step = if cfg!(miri) { 97 } else { 1 };
+        // Under Miri (about 100x slower, run weekly with a 60-minute limit)
+        // only a sample: every 9973rd scalar value plus the tables.
+        let step = if cfg!(miri) { 9973 } else { 1 };
         (0..=0x10_FFFFu32)
             .step_by(step)
             .chain(0xB5..0x180)
