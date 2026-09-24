@@ -1,0 +1,22 @@
+# Area labels, applied from the paths a pull request changes (actions/labeler).
+"area: core":
+  - changed-files:
+      - any-glob-to-any-file: ["crates/keyhammer/**"]
+"area: legacy":
+  - changed-files:
+      - any-glob-to-any-file: ["legacy/**"]
+"area: node":
+  - changed-files:
+      - any-glob-to-any-file: ["crates/node/**"]
+"area: bench":
+  - changed-files:
+      - any-glob-to-any-file: ["bench/**"]
+"area: docs":
+  - changed-files:
+      - any-glob-to-any-file: ["docs/**", "*.md"]
+"area: ci":
+  - changed-files:
+      - any-glob-to-any-file: [".github/**"]
+"dependencies":
+  - changed-files:
+      - any-glob-to-any-file: ["**/Cargo.lock", "**/package-lock.json"]
