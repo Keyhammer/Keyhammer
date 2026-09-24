@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - "website/**"
+      - "assets/**"
       - "docs/**"
       - "crates/keyhammer/**"
       - "CONTRIBUTING.md"
@@ -16,6 +17,7 @@ on:
     branches: [main]
     paths:
       - "website/**"
+      - "assets/**"
       - "docs/**"
       - "crates/keyhammer/**"
       - "CONTRIBUTING.md"

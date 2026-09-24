@@ -1,20 +1,21 @@
 :root {
-  --ifm-color-primary: #2563eb;
-  --ifm-color-primary-dark: #1d55d0;
-  --ifm-color-primary-darker: #1b4fc5;
-  --ifm-color-primary-darkest: #1641a2;
-  --ifm-color-primary-light: #3b74ee;
-  --ifm-color-primary-lighter: #4a7fef;
-  --ifm-color-primary-lightest: #7099f3;
+  /* Palette taken from the logo: indigo (primary) and amber (accent). */
+  --ifm-color-primary: #2f2e74;
+  --ifm-color-primary-dark: #2a2967;
+  --ifm-color-primary-darker: #282763;
+  --ifm-color-primary-darkest: #202052;
+  --ifm-color-primary-light: #34337f;
+  --ifm-color-primary-lighter: #363583;
+  --ifm-color-primary-lightest: #45449e;
   --ifm-code-font-size: 95%;
 }
 
 [data-theme='dark'] {
-  --ifm-color-primary: #60a5fa;
-  --ifm-color-primary-dark: #3b91f9;
-  --ifm-color-primary-darker: #2a88f8;
-  --ifm-color-primary-darkest: #0a6fe9;
-  --ifm-color-primary-light: #85b9fb;
-  --ifm-color-primary-lighter: #96c3fc;
-  --ifm-color-primary-lightest: #c1dbfd;
+  --ifm-color-primary: #8c88f0;
+  --ifm-color-primary-dark: #7d78ee;
+  --ifm-color-primary-darker: #7570ed;
+  --ifm-color-primary-darkest: #4f49e8;
+  --ifm-color-primary-light: #9b98f2;
+  --ifm-color-primary-lighter: #a4a1f3;
+  --ifm-color-primary-lightest: #c7c5f8;
 }
