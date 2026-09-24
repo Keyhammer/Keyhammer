@@ -31,8 +31,11 @@ dependencies. Queries and terms are lowercased bytes for now.
   lower bound, and an oracle test checks the results against brute force.
 - By default (`Ranking::Coarse`) results are ranked by the weighted cost
   rounded up to whole units of 16, then by higher frequency weight, then by
-  term id. This is not a count of edits: an edit on the first byte counts as
-  two units and two cheap edits (8 + 8) count as one. The weighted costs still
+  term id. This is not a count of edits: the x1.5 factor on the first byte
+  makes an ordinary (non-neighbouring-key) edit there cost 24, i.e. two units,
+  while a neighbouring-key substitution there costs 12 (one unit) and a
+  transposition 18 (two units); two cheap edits (8 + 8) count as one. The
+  weighted costs still
   set the budget and the candidates. `Ranking::Exact` ranks by the exact
   weighted cost instead.
 - An optional subtree signature bound (each node keeps the length range and a
@@ -80,11 +83,11 @@ addendum for the current ranking):
 
 | Engine | MRR | p95 latency (us) |
 |---|---|---|
-| legacy (previous engine) | 0.255 | 44934.5 |
-| baseline | 0.433 | 76590.3 |
-| new+tsb | 0.429 | 384.2 |
+| legacy (previous engine) | 0.255 | 51773.0 |
+| baseline | 0.433 | 78243.6 |
+| new+tsb | 0.429 | 370.3 |
 
-The p95 of the previous engine is 117.0x that of the new one. The paired MRR
+The p95 of the previous engine is 139.8x that of the new one. The paired MRR
 difference of the new engine minus the baseline is +0.007, -0.003 and -0.004 at
 10000, 100000 and 274137 words, with 95% intervals of about +-0.017 that all
 contain 0: statistically indistinguishable, not a gain, and these 300 pairs

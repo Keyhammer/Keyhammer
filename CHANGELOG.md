@@ -23,8 +23,10 @@ All notable changes to this project are documented here. The format follows
 - Current engine moved to `legacy/` and kept only as a benchmark reference.
 - Default ranking is now the weighted cost rounded up to whole units of 16,
   then higher weight, then term id (`Ranking::Coarse`). This is not a count of
-  edits: an edit on the first byte counts as two units and two cheap edits
-  (8 + 8) count as one. `Ranking::Exact` restores the previous order by exact
+  edits: the x1.5 factor on the first byte makes an ordinary
+  (non-neighbouring-key) edit there cost 24, i.e. two units, while a
+  neighbouring-key substitution there costs 12 (one unit) and a transposition
+  18 (two units); two cheap edits (8 + 8) count as one. `Ranking::Exact` restores the previous order by exact
   weighted cost. `Hit::cost` is the exact weighted cost in both modes.
 - With the default ranking, `Output::hits` is no longer ordered by ascending
   exact `cost`: do not assume that `hits[0].cost` is the minimum; use
