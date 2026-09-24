@@ -11,6 +11,8 @@ All notable changes to this project are documented here. The format follows
   robustness, brute-force oracle equality and `tsb` on/off equivalence, a
   weekly `fuzz` workflow, and a deterministic `tests/fuzz_like.rs` running the
   same properties in `cargo test`; see `docs/fuzzing.md`.
+- CI: `cargo deny` (licences, advisories, bans, sources; `deny.toml`), a weekly
+  Miri run over the core tests, and a gzipped `.wasm` size gate (budget 20 KB).
 - `SearchConfig::high_recall()`: an opt-in preset with `budget = 48` and
   `tsb: true`; the default budget stays 32. On the 300 Birkbeck typo pairs it
   found the right word more often. With `tsb: true` on both sides, it expanded

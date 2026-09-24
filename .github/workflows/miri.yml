@@ -1,0 +1,45 @@
+name: miri
+
+# Runs the core crate's tests under Miri to catch undefined behaviour. The core
+# forbids `unsafe`, so this is a cheap safety net for its dependencies and for
+# future changes; it is slow, so it runs weekly rather than on every push.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+  # Also runs when this file changes, so an edit is checked before it merges.
+  pull_request:
+    paths: [".github/workflows/miri.yml"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Turns integer-to-pointer casts into errors.
+  MIRIFLAGS: -Zmiri-strict-provenance
+
+jobs:
+  miri:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - run: cargo miri setup
+      # The brute-force oracle comparisons run thousands of seeded searches;
+      # under Miri they need far more than 45 minutes (a first run of the whole
+      # suite timed out) and add nothing for undefined behaviour, since the
+      # same code paths run in the other tests (a_term_of_* build 65535-byte
+      # terms, also very slow under Miri). They are skipped by name here
+      # (no source changes) and still run in the normal `test` job. Locally this
+      # takes a few minutes (tests/fuzz_like.rs already scales itself under Miri).
+      - run: >
+          cargo miri test -p keyhammer --
+          --skip lower_bound_never_exceeds
+          --skip matches_the_oracle
+          --skip both_rankings
+          --skip tsb_and_plain
+          --skip a_term_of_
