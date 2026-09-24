@@ -1,0 +1,20 @@
+[package]
+name = "keyhammer-wasm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "WebAssembly build of the Keyhammer core with a small C-ABI (unpublished prototype)"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/Keyhammer/Keyhammer"
+publish = false
+
+# The workspace lints are not inherited on purpose: the core forbids `unsafe`,
+# while this boundary crate needs a small, documented amount of it (raw
+# pointers handed over by JavaScript). The equivalent lints are set in
+# src/lib.rs.
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+keyhammer = { path = "../../crates/keyhammer" }
