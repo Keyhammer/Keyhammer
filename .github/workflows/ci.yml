@@ -69,6 +69,12 @@ jobs:
           remap="$remap --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
           RUSTFLAGS="$remap" cargo build -p keyhammer-wasm --target wasm32-unknown-unknown --profile wasm
       - run: node bindings/wasm/test.mjs
+      # The module the node job below tests on all three platforms.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keyhammer-wasm
+          path: target/wasm32-unknown-unknown/wasm/keyhammer_wasm.wasm
+          if-no-files-found: error
       # Size gate: fails if the gzipped module grows past the budget. The
       # budget is 20 KB (20480 bytes) against about 16.7 KB today; to raise it,
       # change WASM_GZIP_BUDGET below in a pull request that says why. The
@@ -85,6 +91,40 @@ jobs:
             echo "::error::gzipped wasm $size B exceeds budget $WASM_GZIP_BUDGET B; shrink it or raise WASM_GZIP_BUDGET in a PR that says why"
             exit 1
           fi
+
+  # The Node.js package (bindings/node) is JavaScript over the wasm module built
+  # above, so it needs no per-platform binary: the same file is tested on
+  # Linux, macOS and Windows. Nothing is published.
+  node:
+    needs: wasm
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [18, 22]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: keyhammer-wasm
+          path: bindings/node
+      - name: Place the module
+        shell: bash
+        working-directory: bindings/node
+        run: mv keyhammer_wasm.wasm keyhammer.wasm
+      - working-directory: bindings/node
+        run: npm test
+      # The package must contain exactly these files.
+      - name: Package contents
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 22
+        working-directory: bindings/node
+        run: |
+          npm pack --dry-run --json | node -e 'const f=JSON.parse(require("fs").readFileSync(0,"utf8"))[0].files.map(x=>x.path).sort().join(","); console.log(f); if (f!=="README.md,index.d.ts,index.js,keyhammer.wasm,package.json") process.exit(1)'
 
   deny:
     runs-on: ubuntu-latest

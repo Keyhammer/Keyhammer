@@ -3,9 +3,6 @@
 .idea/
 node_modules/
 *.node
-crates/node/package-lock.json
-crates/node/Cargo.lock
-crates/node/index.d.ts
 bench/data/
 bench/node_modules/
 /website/build/
@@ -14,3 +11,4 @@ bench/node_modules/
 /website/docs/
 /website/static/api/
 /website/static/wasm/
+/bindings/node/keyhammer.wasm
