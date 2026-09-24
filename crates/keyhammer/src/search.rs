@@ -8,13 +8,26 @@
 //! `i = j + k - W`, where `W = budget / c_indel_min` is the band half-width.
 //! A node is queued with a lower bound on the cost of every term below it, so
 //! the first terminal popped is always the best remaining one.
+//!
+//! The budget, the band and the candidates always use the weighted costs of
+//! [`CostModel`]. The order of the results is set by [`Ranking`]: by default
+//! ([`Ranking::Coarse`]) terms are ranked by the weighted cost rounded up to
+//! whole units of 16 ([`whole_units`]), then by higher weight, then by lower
+//! term id, so the weight decides between terms whose costs round to the same
+//! number of units. This is not a count of edits: the x1.5 factor on the
+//! first byte makes an ordinary (non-neighbouring-key) edit there cost 24,
+//! i.e. two units, while a neighbouring-key substitution there costs 12 (one
+//! unit) and a transposition 18 (two units); two cheap edits (8 + 8) count as
+//! one.
+//! [`Ranking::Exact`] ranks by the exact weighted cost instead, then weight,
+//! then id. In both modes [`Hit::cost`] is the exact weighted cost.
 
 use alloc::collections::BinaryHeap;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt;
 
-use crate::cost::{Cost, CostModel, INF, class};
+use crate::cost::{Cost, CostModel, INF, class, whole_units};
 use crate::trie::{NO_TERM, Trie};
 
 /// Longest accepted query, in bytes.
@@ -22,7 +35,39 @@ pub const MAX_QUERY_LEN: usize = 128;
 const MAX_W: usize = 8;
 const ROW: usize = 2 * MAX_W + 1;
 
+/// How results are ordered.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Ranking {
+    /// By the weighted cost rounded up to whole units of 16
+    /// ([`whole_units`]), then higher weight, then lower term id. Terms whose
+    /// costs round to the same number of units are ordered by weight. This is
+    /// not a count of edits: the x1.5 factor on the first byte makes an
+    /// ordinary (non-neighbouring-key) edit there cost 24, i.e. two units,
+    /// while a neighbouring-key substitution there costs 12 (one unit) and a
+    /// transposition 18 (two units); two cheap edits (8 + 8) count as one.
+    #[default]
+    Coarse,
+    /// By the exact weighted cost, then higher weight, then lower term id.
+    Exact,
+}
+
+impl Ranking {
+    /// The cost used for ordering.
+    #[inline]
+    fn rank(self, cost: Cost) -> Cost {
+        match self {
+            Ranking::Coarse => whole_units(cost),
+            Ranking::Exact => cost,
+        }
+    }
+}
+
 /// Search parameters.
+///
+/// Build it with `..SearchConfig::default()` so that new fields keep their
+/// defaults: `k = 10`, `budget = 32` (two ordinary edits' worth of cost), `tsb = false`,
+/// `max_nodes = 100_000`, `ranking = Ranking::Coarse`.
 #[derive(Clone, Debug)]
 pub struct SearchConfig {
     /// Number of results wanted.
@@ -33,6 +78,8 @@ pub struct SearchConfig {
     pub tsb: bool,
     /// Hard limit on expanded trie nodes.
     pub max_nodes: usize,
+    /// How results are ordered.
+    pub ranking: Ranking,
 }
 
 impl Default for SearchConfig {
@@ -42,6 +89,7 @@ impl Default for SearchConfig {
             budget: 32,
             tsb: false,
             max_nodes: 100_000,
+            ranking: Ranking::Coarse,
         }
     }
 }
@@ -51,7 +99,8 @@ impl Default for SearchConfig {
 pub struct Hit {
     /// Term id (see [`Trie::term`]).
     pub id: u32,
-    /// Weighted edit cost between the query and the term.
+    /// Exact weighted edit cost between the query and the term, whatever the
+    /// [`Ranking`].
     pub cost: Cost,
     /// The term's weight.
     pub weight: u16,
@@ -115,6 +164,8 @@ struct Entry {
     seq: u32,
     node: u32,
     term: u32,
+    /// Exact weighted cost of a terminal entry (unused for node entries).
+    cost: Cost,
     depth: u16,
     cur: [Cost; ROW],
     prev: [Cost; ROW],
@@ -138,9 +189,17 @@ impl Ord for Entry {
     }
 }
 
+/// Queue key: ranking cost, then higher weight, then lower id.
+///
+/// `rank` is the ranking cost ([`Ranking::rank`]) of either a terminal's exact
+/// cost or a node's lower bound. Both ranking functions are monotone
+/// non-decreasing in the cost, so the rank of a node's lower bound never
+/// exceeds the rank of any term below it, and with the subtree's largest
+/// weight the node key stays a lower bound on every key below it: the bound
+/// remains admissible and the first terminal popped is still the best one.
 #[inline]
-fn pack(cost: Cost, weight: u16, id: u32) -> u64 {
-    (u64::from(cost) << 48) | (u64::from(u16::MAX - weight) << 32) | u64::from(id)
+fn pack(rank: Cost, weight: u16, id: u32) -> u64 {
+    (u64::from(rank) << 48) | (u64::from(u16::MAX - weight) << 32) | u64::from(id)
 }
 
 #[inline]
@@ -266,11 +325,16 @@ impl Searcher {
         Self::default()
     }
 
+    // Seven arguments since terminal entries carry their exact cost; a
+    // parameter struct would add more code than it removes, so the lint is
+    // allowed here.
+    #[allow(clippy::too_many_arguments)]
     fn push(
         &mut self,
         key: u64,
         node: u32,
         term: u32,
+        cost: Cost,
         depth: u16,
         cur: [Cost; ROW],
         prev: [Cost; ROW],
@@ -281,13 +345,15 @@ impl Searcher {
             seq: self.seq,
             node,
             term,
+            cost,
             depth,
             cur,
             prev,
         });
     }
 
-    /// Returns the `cfg.k` terms of lowest cost within `cfg.budget`, best first.
+    /// Returns the `cfg.k` best terms within `cfg.budget`, best first, in the
+    /// order set by `cfg.ranking`.
     ///
     /// `q` must already be lowercase; bytes outside `a..=z` are compared verbatim.
     pub fn search(
@@ -327,6 +393,7 @@ impl Searcher {
         self.heap.clear();
         self.seq = 0;
 
+        let rank = |c: Cost| cfg.ranking.rank(c);
         let root_cur = root_row(q, cm, w, cfg.budget);
         let root_prev = [INF; ROW];
         let lb = lower_bound(
@@ -343,9 +410,10 @@ impl Searcher {
         );
         if lb <= cfg.budget {
             self.push(
-                pack(lb, trie.max_weight(0), 0),
+                pack(rank(lb), trie.max_weight(0), 0),
                 0,
                 NO_TERM,
+                0,
                 0,
                 root_cur,
                 root_prev,
@@ -356,7 +424,7 @@ impl Searcher {
             if e.term != NO_TERM {
                 out.hits.push(Hit {
                     id: e.term,
-                    cost: (e.key >> 48) as Cost,
+                    cost: e.cost,
                     weight: trie.weight(e.term),
                 });
                 if out.hits.len() == cfg.k {
@@ -376,8 +444,9 @@ impl Searcher {
             if tid != NO_TERM {
                 if let Some(k) = (m + w).checked_sub(depth) {
                     if k <= 2 * w && e.cur[k] <= cfg.budget {
-                        let key = pack(e.cur[k], trie.weight(tid), tid);
-                        self.push(key, e.node, tid, e.depth, [INF; ROW], [INF; ROW]);
+                        let cost = e.cur[k];
+                        let key = pack(rank(cost), trie.weight(tid), tid);
+                        self.push(key, e.node, tid, cost, e.depth, [INF; ROW], [INF; ROW]);
                     }
                 }
             }
@@ -410,9 +479,10 @@ impl Searcher {
                 );
                 if lb <= cfg.budget {
                     self.push(
-                        pack(lb, trie.max_weight(c), 0),
+                        pack(rank(lb), trie.max_weight(c), 0),
                         c as u32,
                         NO_TERM,
+                        0,
                         e.depth + 1,
                         row,
                         e.cur,

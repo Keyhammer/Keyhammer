@@ -10,6 +10,23 @@
 /// A fixed-point edit cost (16 = one ordinary edit).
 pub type Cost = u16;
 
+/// The cost of one ordinary edit. Every cost in the table below is expressed
+/// in these units: cheaper edits (a neighbouring key, a doubled letter, a
+/// transposition) cost a fraction of it, edits on the first byte cost more.
+pub const COST_UNIT: Cost = 16;
+
+/// The weighted `cost` rounded up to whole units of [`COST_UNIT`]: 0 stays 0,
+/// 1 to 16 is one unit, 17 to 32 two units, and so on.
+///
+/// This is not a count of edits. The x1.5 factor on the first query byte
+/// makes an ordinary (non-neighbouring-key) edit there cost 24, i.e. two
+/// units, while a neighbouring-key substitution there costs 12 (one unit) and
+/// a transposition 18 (two units); two cheap edits (8 + 8) count as one.
+#[inline]
+pub fn whole_units(cost: Cost) -> Cost {
+    cost.div_ceil(COST_UNIT)
+}
+
 /// Sentinel for "unreachable or over budget". `INF` plus any single edit cost
 /// still fits in a `u16`.
 pub const INF: Cost = 30_000;

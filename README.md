@@ -15,9 +15,11 @@ License: [AGPL-3.0-or-later](LICENSE)
 ## Status
 
 Early prototype. Nothing is published to crates.io or npm, and the API is
-unstable. The new engine is much faster than the previous one, but its ranking
-quality is currently below a simple "edit distance plus frequency" baseline.
-See [`docs/benchmarks/m0.md`](docs/benchmarks/m0.md).
+unstable. The new engine is much faster than the previous one. On the
+benchmark corpus (300 typo pairs, provisional costs) its ranking quality is
+statistically indistinguishable from a simple "edit distance plus frequency"
+baseline: no evidence that it is worse, none that it is better. See
+[`docs/benchmarks/m0.md`](docs/benchmarks/m0.md).
 
 ## What it is
 
@@ -34,6 +36,15 @@ dependencies. Queries and terms are lowercased bytes for now.
   band around the diagonal.
 - The search is exact best-first top-k: nodes are expanded in order of their
   lower bound, and an oracle test checks the results against brute force.
+- By default (`Ranking::Coarse`) results are ranked by the weighted cost
+  rounded up to whole units of 16, then by higher frequency weight, then by
+  term id. This is not a count of edits: the x1.5 factor on the first byte
+  makes an ordinary (non-neighbouring-key) edit there cost 24, i.e. two units,
+  while a neighbouring-key substitution there costs 12 (one unit) and a
+  transposition 18 (two units); two cheap edits (8 + 8) count as one. The
+  weighted costs still
+  set the budget and the candidates. `Ranking::Exact` ranks by the exact
+  weighted cost instead.
 - An optional subtree signature bound (each node keeps the length range and a
   letter mask of the terms below it) prunes subtrees that cannot improve the
   result. On the benchmark data it expands about a third fewer nodes with the
@@ -73,18 +84,23 @@ The same example runs as a doc test in `crates/keyhammer/src/lib.rs`.
 
 Rust-only, one machine, one run, 300 typo pairs (Birkbeck corpus), one English
 dictionary, provisional costs. Full dictionary of 274137 words; the baseline is
-"unit edit distance <= 2, then higher weight". Full report and caveats:
+"unit edit distance <= 2, then higher weight". Full report and caveats (see the
+addendum for the current ranking):
 [`docs/benchmarks/m0.md`](docs/benchmarks/m0.md).
 
 | Engine | MRR | p95 latency (us) |
 |---|---|---|
-| legacy (previous engine) | 0.255 | 44691.7 |
-| baseline | 0.433 | 79726.6 |
-| new+tsb | 0.389 | 363.2 |
+| legacy (previous engine) | 0.255 | 51773.0 |
+| baseline | 0.433 | 78243.6 |
+| new+tsb | 0.429 | 370.3 |
 
-The p95 of the previous engine is 123.0x that of the new one. The new engine's
-MRR is lower than the baseline's at every dictionary size tested (10000,
-100000 and 274137 words).
+The p95 of the previous engine is 139.8x that of the new one. The paired MRR
+difference of the new engine minus the baseline is +0.007, -0.003 and -0.004 at
+10000, 100000 and 274137 words, with 95% intervals of about +-0.017 that all
+contain 0: statistically indistinguishable, not a gain, and these 300 pairs
+cannot show parity to within a few thousandths either. Against the engine's
+previous ordering by exact cost the gain is significant (+0.015, +0.028 and
++0.040).
 
 ## Repository layout
 
