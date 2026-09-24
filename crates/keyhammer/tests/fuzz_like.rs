@@ -244,3 +244,8 @@ fn structured_text(rng: &mut Rng) -> Vec<u8> {
 fn text_matches_the_oracle() {
     run(6, 3_000, structured_text, fuzz_props::text_oracle_equality);
 }
+
+#[test]
+fn highlight_matches_the_hit_cost() {
+    run(7, 3_000, structured_text, fuzz_props::highlight);
+}

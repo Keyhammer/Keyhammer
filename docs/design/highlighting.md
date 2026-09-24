@@ -110,8 +110,13 @@ computed in one pass over the source; the tests check them against `text::utf8_r
 `text::utf16_range`.
 
 Besides the ranges the result reports `aligned`, the span of the source that the query was
-aligned with: the whole term in whole-term mode (from its first character that produced a
-symbol), the matched prefix in prefix mode (section 6).
+aligned with: the whole term in whole-term mode, the matched prefix in prefix mode (section 6).
+It is derived like the ranges: a source character is aligned when at least one of its symbols
+is, and a mark that produced nothing follows the character before it. So a prefix cut inside
+an expansion (the first `s` of `ß`) aligns the whole `ß` and the marks after it, every range lies
+within `aligned`, and a mark at the start of the string is outside it. When nothing is aligned
+(the empty prefix), `aligned` is empty and sits before the first character that produced a
+symbol.
 
 ## 3. The traceback
 
