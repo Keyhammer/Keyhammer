@@ -14,8 +14,10 @@
 // --out     directory for the download and the outputs; default: the --data directory
 // --sample  size of the fixed-seed sample used by the Rust harness; default: 3000
 //
+// Needs Node >= 18 (global fetch). An interrupted download leaves only a .part file; delete it and retry.
+//
 // Source: https://userinterfaces.aalto.fi/136Mkeystrokes/ (data/Keystrokes.zip,
-// 1 572 785 433 bytes, 168 595 participants). Licence (readme.txt in the archive):
+// 1 572 785 433 bytes, 168 594 participants). Licence (readme.txt in the archive):
 // free for non-commercial use in research or projects, with attribution to the
 // authors. That is not an open-source licence: the archive and the derived files
 // must not be redistributed or committed; this script only rebuilds them locally.
@@ -38,7 +40,10 @@
 //   slips-sample.tsv  the same columns, --sample unique pairs shuffled with a fixed seed
 //   category: sub_adjacent | sub_other | transposition | extra_letter | extra_doubled |
 //             missing_letter | missing_doubled | two_edits
-//   first:    1 when the edit involves the first letter of the word, else 0
+//   first:    1 when the edit involves the first letter of the word, else 0. For an extra or
+//             missing letter, 1 only when no non-initial deletion gives the same word (a doubled
+//             first letter such as tthe is deleted at position 1, which the engine prices with
+//             no first-letter factor). For two_edits it means typo[0] !== correct[0].
 //   count:    occurrences over all participants; users: distinct participants
 import fs from "fs";
 import path from "path";
@@ -79,11 +84,16 @@ async function download() {
   if (!fs.existsSync(p)) {
     const res = await fetch(SOURCE.url, { headers: { "user-agent": "keyhammer-bench (https://github.com/Keyhammer/Keyhammer)" } });
     if (!res.ok) throw new Error(`download failed: ${SOURCE.url} (${res.status})`);
-    await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(p));
+    const part = `${p}.part`;
+    await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(part));
+    const psize = fs.statSync(part).size;
+    const pgot = await sha256File(part);
+    if (psize !== SOURCE.size || pgot !== SOURCE.sha256) throw new Error(`checksum mismatch for ${SOURCE.file}: ${psize} bytes, sha256 ${pgot}; delete ${part} and retry`);
+    fs.renameSync(part, p);
   }
   const size = fs.statSync(p).size;
   const got = await sha256File(p);
-  if (size !== SOURCE.size || got !== SOURCE.sha256) throw new Error(`checksum mismatch for ${SOURCE.file}: ${size} bytes, sha256 ${got}`);
+  if (size !== SOURCE.size || got !== SOURCE.sha256) throw new Error(`checksum mismatch for ${SOURCE.file}: ${size} bytes, sha256 ${got}; delete ${p} and retry`);
   console.log(`ok ${SOURCE.file} (${size} bytes)`);
   return p;
 }
@@ -212,7 +222,8 @@ function classify(t, c) {
     let found = false;
     for (let i = 0; i < t.length; i++) {
       if (t.slice(0, i) + t.slice(i + 1) === c) {
-        if (!found) first = i === 0 ? 1 : 0;
+        // first only when no non-initial removal works (a doubled first letter is deleted at position 1)
+        first = found ? (i === 0 ? first : 0) : i === 0 ? 1 : 0;
         found = true;
         if (t[i] === t[i - 1] || t[i] === t[i + 1]) doubled = true;
       }
@@ -225,7 +236,7 @@ function classify(t, c) {
   let found = false;
   for (let i = 0; i < c.length; i++) {
     if (c.slice(0, i) + c.slice(i + 1) === t) {
-      if (!found) first = i === 0 ? 1 : 0;
+      first = found ? (i === 0 ? first : 0) : i === 0 ? 1 : 0;
       found = true;
       if (c[i] === c[i - 1] || c[i] === c[i + 1]) doubled = true;
     }
@@ -326,10 +337,18 @@ const rows = [...pairs.keys()].sort().map((key) => {
   return [t, c, cat, first, e.count, e.users];
 });
 const HEADER = "typo\tcorrect\tcategory\tfirst\tcount\tusers\n";
+// Expected SHA-256 of the outputs (see docs/benchmarks/finger-slips.md). They depend on
+// words-full.tsv and, for the sample, on the default --sample 3000.
+const EXPECTED = {
+  "slips.tsv": "7a88ed8a89b7b93a5c765a229df005b7a552d1f8616fc2c6031ad987814cefb7",
+  "slips-sample.tsv": "b94ca31eadd9cda44d36a062f32b387e6c349474c3018c39c0332d61ee9b2ba1",
+};
 const write = (name, list) => {
   const text = HEADER + list.map((r) => r.join("\t")).join("\n") + "\n";
   fs.writeFileSync(path.join(OUT, name), text);
-  console.log(`${name}: ${list.length} pairs (sha256 ${crypto.createHash("sha256").update(text).digest("hex")})`);
+  const sha = crypto.createHash("sha256").update(text).digest("hex");
+  console.log(`${name}: ${list.length} pairs (sha256 ${sha})`);
+  if (SAMPLE === 3000 && sha !== EXPECTED[name]) throw new Error(`${name} does not match the published file: sha256 ${sha}, expected ${EXPECTED[name]} (is words-full.tsv from prepare-m0-data.mjs?)`);
 };
 write("slips.tsv", rows);
 

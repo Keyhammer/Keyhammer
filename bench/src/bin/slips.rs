@@ -301,9 +301,23 @@ fn main() {
             .or_default()
             .push(i);
     }
+    let mut by_cat_first: Vec<(String, Vec<usize>)> = Vec::new();
     let mut order: Vec<String> = CATS.iter().map(|c| c.to_string()).collect();
     order.push("first letter involved".into());
     order.push("first letter untouched".into());
+    for c in CATS {
+        for (first, label) in [
+            (false, "first letter untouched"),
+            (true, "first letter involved"),
+        ] {
+            let idx: Vec<usize> = (0..pairs.len())
+                .filter(|&i| pairs[i].cat == c && pairs[i].first == first)
+                .collect();
+            if idx.len() >= 2 {
+                by_cat_first.push((format!("{c}, {label}"), idx));
+            }
+        }
+    }
     for cat in order {
         let Some(idx) = groups.get(&cat) else {
             continue;
@@ -317,6 +331,24 @@ fn main() {
             m(0),
             m(1),
             m(2)
+        );
+    }
+    println!(
+        "
+### category by first letter (all pairs)
+"
+    );
+    println!(
+        "| group | n | MRR default | MRR baseline | default - baseline (SE) |
+|---|---|---|---|---|"
+    );
+    for (name, idx) in &by_cat_first {
+        let (d, se, _) = paired(&systems[0].1, &systems[2].1, idx);
+        println!(
+            "| {name} | {} | {:.3} | {:.3} | {d:+.3} ({se:.3}) |",
+            idx.len(),
+            stat(&systems[0].1, idx).0,
+            stat(&systems[2].1, idx).0
         );
     }
 }

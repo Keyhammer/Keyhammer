@@ -4,10 +4,10 @@ Issue #38 asked for a machine-readable corpus of finger slips (typing errors, no
 
 ## Summary
 
-- A real corpus was available and downloadable, so no synthetic data is used here. Source: the 136M Keystrokes dataset (Dhakal et al., CHI 2018). It is free for non-commercial research or projects with attribution, which is not an open-source licence, so the archive and everything derived from it stay out of the repository. `bench/fetch-finger-slips.mjs` rebuilds them locally.
+- A real corpus was available and downloadable, so no synthetic data is used here. Source: the 136M Keystrokes dataset (Dhakal et al., CHI 2018). It is free for non-commercial research or projects with attribution, which is not an open-source licence, so the archive and everything derived from it stay out of the repository. `bench/fetch-finger-slips.mjs` rebuilds them locally. The corpus and its derivatives cannot be redistributed. Using them for evaluation only may still conflict with "non-commercial" if the maintainer offers Keyhammer commercially (for example dual licensing); the maintainer must decide this before relying on these results.
 - 57 542 unique (typo, intended word) pairs, from 159 124 occurrences typed by 136 959 participants. Counts per category are below. The corpus still contains classic spelling errors (`recieved`, `seperate`); it is a corpus of uncorrected typing errors, not a clean set of finger slips.
-- On a fixed-seed sample of 3000 unique pairs (274 137-word dictionary), the engine with keyboard costs ranked the right word below the unit-cost baseline: MRR@10 0.841 (default, budget 32) and 0.842 (budget 48) against 0.871, paired difference -0.031 (SE 0.004) and -0.029 (SE 0.004).
-- The loss is concentrated where the first letter is wrong (n = 330: -0.295, SE 0.022) and on transpositions (n = 214: -0.077, SE 0.017). Where the first letter is untouched (n = 2670) the difference is +0.002 (SE 0.003): no measurable difference. On adjacent-key substitutions, the case the costs were designed for (n = 484), it is -0.002 (SE 0.006): no measurable benefit.
+- On a fixed-seed sample of 3000 unique pairs (274 137-word dictionary), the shipped engine (keyboard costs, x1.5 first-letter factor, cost budget, `Coarse` ranking) ranked below a plain OSA<=2 baseline: MRR@10 0.841 (default, budget 32) and 0.842 (budget 48) against 0.871, paired difference -0.031 (SE 0.004) and -0.029 (SE 0.004).
+- The whole loss is on first-letter pairs (n = 312: -0.308, SE 0.023); where the first letter is untouched (n = 2688) the difference is +0.002 (SE 0.003). The adjacency costs showed no measurable benefit on adjacent-key substitutions, the case they were designed for (n = 484: -0.002, SE 0.006).
 - So on this corpus the keyboard-aware costs did not improve ranking, in agreement with #21 and #40. This measurement cannot say which part of the model is responsible (see Limits): the baseline differs from the engine in more than the costs.
 
 ## Source, licence, size
@@ -18,7 +18,7 @@ Issue #38 asked for a machine-readable corpus of finger slips (typing errors, no
 | URL | https://userinterfaces.aalto.fi/136Mkeystrokes/data/Keystrokes.zip |
 | Size | 1 572 785 433 bytes (18 854 241 824 bytes unzipped; 168 594 participants in the metadata, 15 sentences each) |
 | SHA-256 | `5fb217e0e1273017a6789c5c7ebcc00eed624f2f6426c284da2077a88e270420` (checked by the script; the server's `Last-Modified` is 2018-03-29) |
-| Licence | `readme.txt` in the archive: "free to use this data for non-commercial use in your own research or projects with attribution to the authors". Not an open-source licence; not redistributed here |
+| Licence | `readme.txt` in the archive: "free to use this data for non-commercial use in your own research or projects with attribution to the authors". Not an open-source licence; not redistributed here; cannot be redistributed by users either, and evaluation-only use may still conflict with "non-commercial" if Keyhammer is offered commercially (the maintainer must decide) |
 
 Each participant transcribed 15 sentences in an online typing test; the archive holds one row per keystroke with the sentence shown (`SENTENCE`) and the text submitted (`USER_INPUT`). The sentences come from a fixed set, so the intended words are drawn from a limited vocabulary: 2258 distinct intended words in the full corpus, 1472 in the sample.
 
@@ -61,15 +61,16 @@ Categories (`category` column of `slips.tsv`). Operations are given from the typ
 | two_edits | 10 391 | 18.1% | 13 503 | 548 |
 | total | 57 542 | 100% | 159 124 | 3 000 |
 
-The first letter is involved in 6 755 unique pairs (11.7%); 330 of the 3000 in the sample. The corpus has 4 692 transpositions and 322 missing-doubled pairs, so those two categories are thin only in the sample (214 and 18), not in the corpus.
+The first letter is involved in 6 258 unique pairs (10.9%); 312 of the 3000 in the sample. `first` is 1 for an extra or missing letter only when no non-initial deletion gives the same word (a doubled first letter, `tthe`, is deleted at position 1, which the engine prices without the first-letter factor), and for `two_edits` it means typo[0] differs from correct[0]. The corpus has 4 692 transpositions and 322 missing-doubled pairs, so those two categories are thin only in the sample (214 and 18), not in the corpus.
 
-Outputs: `bench/data/slips.tsv` (SHA-256 `03c8c19749d75ee1003609513d600b5e93af45f850cb98c34e3e152630676091`, 2 031 177 bytes) and `bench/data/slips-sample.tsv` (`2e04ee4cd1df19c91fb8016e145b0068c70e0a9531091692efd15b6dca068df9`, 3000 unique pairs shuffled with seed 20260924; 106 037 bytes). Both depend on `words-full.tsv`; the script checks the hashes and fails on a mismatch. Columns: `typo, correct, category, first, count, users`.
+Outputs: `bench/data/slips.tsv` (SHA-256 `7a88ed8a89b7b93a5c765a229df005b7a552d1f8616fc2c6031ad987814cefb7`, 2 031 177 bytes) and `bench/data/slips-sample.tsv` (`b94ca31eadd9cda44d36a062f32b387e6c349474c3018c39c0332d61ee9b2ba1`, 3000 unique pairs shuffled with seed 20260924; 106 037 bytes). Both depend on `words-full.tsv`; the script checks both hashes (with the default `--sample`) and fails on a mismatch. Columns: `typo, correct, category, first, count, users`.
 
 ## What this corpus is not
 
 - It holds uncorrected errors: text the participant submitted. Slips noticed and fixed with backspace are not in it. Errors that survive are the ones the typist did not notice, which may differ from the ones made (doubled letters and transpositions are probably noticed more often; that is a hypothesis, not measured).
 - It cannot separate slips from spelling errors. The most frequent pairs are systematic (`recieved` by 672 participants, `seperate` 473, `tommorow` 362). Pairs typed by at most two participants (2414 of the 3000 sampled pairs) are more likely idiosyncratic slips; this is a proxy, not a label. The measurement below is repeated on that subset.
 - The stimuli are a fixed set of sentences of short business-style English, so it is one domain and a small vocabulary.
+- Words truncated at an early submit (`ther` for `there`, `th` for `the`) may appear as missing-letter pairs.
 - Not every mistake produces a pair: token-count mismatches, real-word slips, and edits at distance above 2 are excluded (funnel above).
 
 A keystroke-level extraction (replaying the key log to recover the corrected slips) would address the first point; it was not done here and is left as a follow-up.
@@ -110,10 +111,31 @@ By category (all 3000 pairs; difference is engine minus baseline, MRR@10, SE in 
 | missing_letter | 399 | 0.820 | 0.820 | 0.858 | -0.037 (0.011) | -0.037 (0.011) |
 | missing_doubled | 18 | 0.894 | 0.894 | 0.873 | +0.021 (0.015) | +0.021 (0.015) |
 | two_edits | 548 | 0.613 | 0.622 | 0.633 | -0.020 (0.011) | -0.011 (0.010) |
-| first letter involved | 330 | 0.511 | 0.526 | 0.807 | -0.295 (0.022) | -0.281 (0.021) |
-| first letter untouched | 2670 | 0.881 | 0.881 | 0.879 | +0.002 (0.003) | +0.002 (0.003) |
+| first letter involved | 312 | 0.488 | 0.503 | 0.795 | -0.308 (0.023) | -0.292 (0.022) |
+| first letter untouched | 2688 | 0.882 | 0.882 | 0.880 | +0.002 (0.003) | +0.002 (0.003) |
 
 The last two rows overlap the categories above (each pair is in one category and in one of them). About ten comparisons per system are shown; the cuts (categories, first letter, at most 2 participants) were fixed before the run, the first-letter cut because of #21 and #40, but with that many tests some |z| above 2 are expected by chance: read the small ones (`sub_other`, `two_edits`, `missing_doubled`) as no evidence either way.
+
+Category by first letter (engine default minus baseline; groups with fewer than 2 pairs omitted; the pairs are the same 3000):
+
+| group | n | MRR default | MRR baseline | default - baseline (SE) |
+|---|---|---|---|---|
+| sub_adjacent, first letter untouched | 418 | 0.893 | 0.907 | -0.015 (0.006) |
+| sub_adjacent, first letter involved | 66 | 0.919 | 0.838 | +0.081 (0.024) |
+| sub_other, first letter untouched | 258 | 0.907 | 0.884 | +0.023 (0.007) |
+| sub_other, first letter involved | 30 | 0.409 | 0.839 | -0.430 (0.072) |
+| transposition, first letter untouched | 188 | 0.944 | 0.955 | -0.010 (0.008) |
+| transposition, first letter involved | 26 | 0.395 | 0.955 | -0.560 (0.073) |
+| extra_letter, first letter untouched | 754 | 0.970 | 0.966 | +0.004 (0.003) |
+| extra_letter, first letter involved | 88 | 0.561 | 0.970 | -0.409 (0.039) |
+| extra_doubled, first letter untouched | 207 | 0.938 | 0.982 | -0.044 (0.011) |
+| missing_letter, first letter untouched | 363 | 0.872 | 0.861 | +0.010 (0.007) |
+| missing_letter, first letter involved | 36 | 0.302 | 0.822 | -0.519 (0.062) |
+| missing_doubled, first letter untouched | 18 | 0.894 | 0.873 | +0.021 (0.015) |
+| two_edits, first letter untouched | 482 | 0.679 | 0.662 | +0.017 (0.010) |
+| two_edits, first letter involved | 66 | 0.133 | 0.424 | -0.290 (0.050) |
+
+Note the two exceptions to the pattern: first-letter adjacent-key substitutions favour the engine (+0.081, n = 66; the 8-cost neighbour edit with the x1.5 factor is 12, one unit), and `extra_doubled` (-0.044, n = 207, first letter untouched) and untouched adjacent-key substitutions (-0.015, SE 0.006) are slightly below the baseline.
 
 ## Reading
 
@@ -121,14 +143,16 @@ Measured:
 
 - Overall the keyboard-aware engine is worse than the unit-cost baseline on this corpus by about 0.03 MRR@10 (about 3.5% relative; about 8 standard errors), with budget 32 and with budget 48. R@10 is 0.955 and 0.959 against 0.974.
 - On adjacent-key substitutions the engine ties the baseline (-0.002, SE 0.006, n = 484). The costs do not show a ranking benefit even on the category they target.
-- The differences sit in the first-letter pairs (-0.295, SE 0.022) and in transpositions (-0.077, SE 0.017). Excluding the first-letter pairs, the overall difference is +0.002 (SE 0.003).
+- The differences sit in the first-letter pairs (-0.308, SE 0.023). Excluding them, the overall difference is +0.002 (SE 0.003). Transpositions lose -0.077 overall, but almost all of it is first-letter transpositions (n = 26, -0.560, SE 0.073); mid-word transpositions (n = 188) are -0.010 (SE 0.008). The same pattern holds for extra_letter (+0.004 against -0.409), missing_letter (+0.010 against -0.519) and sub_other (+0.023 against -0.430).
 - Budget 48 over budget 32: +0.0016 (SE 0.0006), almost all of it in `two_edits` (+0.009 MRR on 548 pairs); the corpus has few pairs the higher budget can reach. Its cost in speed is in `recall-preset.md`.
 
 Hypotheses, not tested here:
 
 - The first-letter loss is the x1.5 factor at position 0, as #21 and #40 found on the GitHub corpus; the baseline has no such factor. Removing it would need a core change and a re-run.
-- The transposition loss is the engine's transposition cost (12, in a unit of 16) relative to the baseline, where a transposition is one edit of the same weight as any other; this is unconfirmed.
-- The keyboard costs are a poor fit to how real typists slip in this data (only 9 125 of 14 159 substitution pairs, 64%, are adjacent keys; the neighbour list is a simple key grid with no fingers or hands).
+- The transposition loss is almost entirely first-letter transpositions (n = 26, -0.56), which the x1.5 factor prices at 18, two whole units. Mid-word transpositions (12, one unit under `Coarse`) are -0.010. Cost 12 is not implicated.
+- 64% of substitution pairs (9 125 of 14 159) are adjacent keys, well above chance (about 16%), yet ranking did not benefit.
+
+Suggested follow-up (not adopted here): re-run with the first-byte factor at 1.0 (and with it applied after rounding), then check whether `extra_doubled` (-0.044, n = 207, first letter untouched) comes from two cheap edits (8 + 8) being merged into one whole unit.
 
 ## Limits
 

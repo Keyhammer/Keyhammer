@@ -33,8 +33,10 @@ All notable changes to this project are documented here. The format follows
 - `bench/fetch-finger-slips.mjs` and `bench/src/bin/slips.rs`: a corpus of real typing
   errors built from the 136M Keystrokes dataset (SHA-256 checked, never committed,
   non-commercial licence), classified by edit operation, and a first measurement of the
-  engine against a unit-cost baseline on it; the keyboard costs did not improve ranking
-  there (MRR@10 -0.031, SE 0.004); see `docs/benchmarks/finger-slips.md`.
+  engine against a unit-cost baseline on it. The shipped engine ranked below a plain
+  OSA<=2 baseline (MRR@10 -0.031, SE 0.004), all of it on first-letter pairs; elsewhere
+  +0.002 (SE 0.003); no measurable benefit of the adjacency costs; see
+  `docs/benchmarks/finger-slips.md`.
 - Fuzz targets (`crates/keyhammer/fuzz`, cargo-fuzz) for build and search
   robustness, brute-force oracle equality and `tsb` on/off equivalence, a
   weekly `fuzz` workflow, and a deterministic `tests/fuzz_like.rs` running the
