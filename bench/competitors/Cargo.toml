@@ -1,0 +1,22 @@
+[package]
+name = "keyhammer-competitors"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Competitive benchmark of keyhammer against Rust typo-tolerant search libraries"
+license = "AGPL-3.0-or-later"
+publish = false
+
+# Stand-alone: kept out of the main workspace so that its dependencies do not
+# enter the main lockfile.
+[workspace]
+
+[dependencies]
+keyhammer = { path = "../../crates/keyhammer" }
+symspell = "=0.5.2"
+fst = { version = "=0.4.7", features = ["levenshtein"] }
+strsim = "=0.11.1"
+bk-tree = "=0.5.0"
+
+[profile.release]
+debug = false
