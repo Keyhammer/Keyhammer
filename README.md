@@ -123,10 +123,14 @@ const restored = KeyhammerIndex.import(terms, 2);
 ## Running
 
 ```bash
-cargo test                          # 115 Rust tests
-cargo bench                         # criterion benchmarks
-cd crates/node && node test.mjs     # 33 Node.js tests
-cd bench-vs-fuse && node bench.mjs  # FuseJS comparison
+cargo test -p keyhammer                # core crate
+cargo test -p keyhammer-legacy         # frozen reference engine
+
+# JS comparison (legacy binding vs Fuse, uFuzzy, fuzzysort, MiniSearch)
+cd bench && npm install && node fetch-data.mjs && node prepare-m0-data.mjs && node compare.mjs
+
+# Rust G0 harness (run from the repository root)
+cargo run --release -p keyhammer-bench --bin m0 -- bench/data
 ```
 
 ## Architecture
@@ -135,7 +139,7 @@ Two-phase search:
 
 1. **Candidate retrieval** — columnar Hamming scan + fingerprint matching for deletions/insertions. For large datasets, a lazy CGL tree ([arXiv:2604.01307](https://arxiv.org/abs/2604.01307)) supplements with sublinear Hamming search.
 
-2. **Ranking** — typo probability scorer combining positional error weight (Wobbrock & Myers 2006), QWERTY confusion matrix (Grudin 1983), transposition detection (Damerau 1964), and bit-level encoding distance.
+2. **Ranking** — typo probability scorer combining positional error weight (the project's own tuning; see `docs/papers.md`), QWERTY confusion matrix (Grudin 1983), transposition detection (Damerau 1964), and bit-level encoding distance.
 
 ## Author
 

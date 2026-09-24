@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Robson Trasel
-// THROWAWAY spike: keyhammer vs fair competitors on real typos (Birkbeck corpus).
+// JS comparison harness reproducing the original spike on real typos (Birkbeck corpus):
+// legacy binding vs Fuse, uFuzzy, fuzzysort, MiniSearch and a plain edit-distance baseline.
 import { createRequire } from "module";
 import fs from "fs";
 const require = createRequire(import.meta.url);
