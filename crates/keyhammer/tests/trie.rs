@@ -117,3 +117,53 @@ fn input_index_of_an_out_of_range_id_is_u32_max() {
     assert_eq!(t.input_index(t.len() as u32), u32::MAX);
     assert_eq!(t.input_index(u32::MAX), u32::MAX);
 }
+
+#[test]
+fn a_term_of_exactly_65535_bytes_builds() {
+    let long = "a".repeat(usize::from(u16::MAX));
+    let t = Trie::build(&[(long.as_str(), 1)]).unwrap();
+    assert_eq!(t.len(), 1);
+    assert_eq!(t.term(0).len(), usize::from(u16::MAX));
+    assert_eq!(t.node_count(), usize::from(u16::MAX) + 1);
+    assert_eq!((t.len_min(0), t.len_max(0)), (u16::MAX, u16::MAX));
+}
+
+#[test]
+fn a_term_of_65536_bytes_is_too_long() {
+    let long = "a".repeat(usize::from(u16::MAX) + 1);
+    assert_eq!(
+        Trie::build(&[(long.as_str(), 1)]).unwrap_err(),
+        BuildError::TermTooLong
+    );
+    // Even when it is not the first term.
+    assert_eq!(
+        Trie::build(&[("ok", 1), (long.as_str(), 1)]).unwrap_err(),
+        BuildError::TermTooLong
+    );
+}
+
+#[test]
+fn a_chain_of_prefix_terms_has_a_terminal_at_every_node() {
+    let t = Trie::build(&[("abc", 1), ("a", 3), ("ab", 2)]).unwrap();
+    // Ids follow the byte order: a, ab, abc.
+    assert_eq!((t.term(0), t.term(1), t.term(2)), ("a", "ab", "abc"));
+    assert_eq!(t.node_count(), 4); // root, a, ab, abc
+    let a = t.children(0).start;
+    let ab = t.children(a).start;
+    let abc = t.children(ab).start;
+    assert_eq!(t.children(0), 1..2);
+    assert_eq!(t.children(abc).len(), 0);
+    assert_eq!(
+        [t.term_id(0), t.term_id(a), t.term_id(ab), t.term_id(abc)],
+        [NO_TERM, 0, 1, 2]
+    );
+    assert_eq!((t.len_min(0), t.len_max(0)), (1, 3));
+    assert_eq!((t.len_min(a), t.len_max(a)), (1, 3));
+    assert_eq!((t.len_min(ab), t.len_max(ab)), (2, 3));
+    assert_eq!((t.len_min(abc), t.len_max(abc)), (3, 3));
+    // The weights differ, so the subtree maximum is the heaviest term below.
+    assert_eq!(
+        [t.max_weight(a), t.max_weight(ab), t.max_weight(abc)],
+        [3, 2, 1]
+    );
+}
