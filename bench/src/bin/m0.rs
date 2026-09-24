@@ -52,6 +52,12 @@ fn score(rank: Option<usize>, rr: &mut Vec<f64>, r1: &mut usize) {
     }
 }
 
+/// Share of queries whose right word was returned within the top 10. Every
+/// search asks for the top 10, so a non-zero reciprocal rank means it was found.
+fn r10(r: &Row) -> f64 {
+    r.rr.iter().filter(|x| **x > 0.0).count() as f64 / r.rr.len() as f64
+}
+
 fn mean(v: &[f64]) -> f64 {
     v.iter().sum::<f64>() / v.len() as f64
 }
@@ -127,17 +133,26 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
     let trie = Trie::build(&items).expect("trie");
     let build_ms = t0.elapsed().as_secs_f64() * 1e3;
     let cm = CostModel::qwerty();
-    for (name, tsb, ranking) in [
-        ("new", false, Ranking::Coarse),
-        ("new+tsb", true, Ranking::Coarse),
-        ("new+tsb/exact", true, Ranking::Exact),
+    // "hr" and "hr+tsb" use the budget of the `SearchConfig::high_recall()` preset (48)
+    // with the subtree bound forced off and on (the preset itself turns it on).
+    for (name, tsb, ranking, high_recall) in [
+        ("new", false, Ranking::Coarse, false),
+        ("new+tsb", true, Ranking::Coarse, false),
+        ("new+tsb/exact", true, Ranking::Exact, false),
+        ("hr", false, Ranking::Coarse, true),
+        ("hr+tsb", true, Ranking::Coarse, true),
     ] {
         let cfg = SearchConfig {
             k: TOP,
             tsb,
             ranking,
-            ..SearchConfig::default()
+            ..if high_recall {
+                SearchConfig::high_recall()
+            } else {
+                SearchConfig::default()
+            }
         };
+        let (mut max_nodes, mut truncated) = (0usize, 0usize);
         let mut searcher = Searcher::new();
         let (mut rr, mut r1, mut expanded, mut ties) = (Vec::new(), 0usize, 0usize, 0usize);
         let mut lat = Vec::new();
@@ -148,6 +163,8 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
                 .expect("search");
             lat.push(t.elapsed().as_secs_f64() * 1e6);
             expanded += out.stats.nodes_expanded;
+            max_nodes = max_nodes.max(out.stats.nodes_expanded);
+            truncated += usize::from(out.stats.truncated);
             let costs: Vec<u16> = out.hits.iter().map(|h| h.cost).collect();
             ties += usize::from(has_tie(&costs));
             score(
@@ -165,7 +182,7 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
             p50_us: percentile(&mut lat.clone(), 0.5),
             p95_us: percentile(&mut lat, 0.95),
             extra: format!(
-                "nodes/query={:.0} build={build_ms:.0}ms ties@10={:.2}",
+                "nodes/query={:.0} max={max_nodes} truncated={truncated} build={build_ms:.0}ms ties@10={:.2}",
                 expanded as f64 / n,
                 ties as f64 / n
             ),
@@ -230,8 +247,14 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
 
     for r in &rows {
         println!(
-            "{:<13} MRR={:.3} R@1={:.3} p50={:>9.1}us p95={:>9.1}us {}",
-            r.name, r.mrr, r.r1, r.p50_us, r.p95_us, r.extra
+            "{:<13} MRR={:.3} R@1={:.3} R@10={:.3} p50={:>9.1}us p95={:>9.1}us {}",
+            r.name,
+            r.mrr,
+            r.r1,
+            r10(r),
+            r.p50_us,
+            r.p95_us,
+            r.extra
         );
     }
     let get = |n: &str| rows.iter().find(|r| r.name == n);
@@ -240,6 +263,16 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
     {
         print_paired(tsb, base);
         print_paired(tsb, exact);
+    }
+    if let (Some(hr), Some(tsb)) = (get("hr+tsb"), get("new+tsb")) {
+        print_paired(hr, tsb);
+        println!(
+            "high_recall vs default (tsb on): R@10 {:.3} vs {:.3}, p50 x{:.1}, p95 x{:.1}",
+            r10(hr),
+            r10(tsb),
+            hr.p50_us / tsb.p50_us,
+            hr.p95_us / tsb.p95_us
+        );
     }
     rows
 }

@@ -82,6 +82,36 @@ pub struct SearchConfig {
     pub ranking: Ranking,
 }
 
+impl SearchConfig {
+    /// An opt-in configuration that trades speed for recall: the default
+    /// settings with `budget = 48` (three ordinary edits' worth of cost) and the
+    /// subtree bound on (`tsb = true`, which does not change the results).
+    ///
+    /// On the benchmark in `docs/benchmarks/recall-preset.md` (300 Birkbeck
+    /// typo pairs, one machine, median of three runs) it found the right word more often
+    /// than the default at every dictionary size, at the price of expanding
+    /// several times more trie nodes per query and a higher latency; the
+    /// measured numbers are in that file. Measure it on your own dictionary
+    /// before relying on it. The maximum accepted budget is 64 (see
+    /// [`SearchError::BudgetTooLarge`]); 64 is not offered as a preset because
+    /// its measured cost grows much faster than its gain.
+    ///
+    /// ```
+    /// use keyhammer::search::SearchConfig;
+    /// let cfg = SearchConfig { k: 5, ..SearchConfig::high_recall() };
+    /// assert_eq!(cfg.budget, 48);
+    /// assert!(cfg.tsb);
+    /// ```
+    #[must_use]
+    pub fn high_recall() -> Self {
+        Self {
+            budget: 48,
+            tsb: true,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for SearchConfig {
     fn default() -> Self {
         Self {

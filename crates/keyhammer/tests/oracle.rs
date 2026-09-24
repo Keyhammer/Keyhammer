@@ -276,3 +276,56 @@ fn both_rankings_return_the_same_candidate_set() {
         }
     }
 }
+
+/// The high-recall preset (budget 48) must stay exact: same hits as brute force,
+/// with the subtree bound on and off and with both rankings.
+#[test]
+fn the_high_recall_preset_matches_the_oracle() {
+    let cm = CostModel::qwerty();
+    for (alpha, dict_size, seeds) in [
+        (3u64, 120usize, 600..612u64),
+        (8, 300, 700..708),
+        (26, 400, 800..804),
+    ] {
+        for seed in seeds {
+            let mut rng = Rng::new(seed);
+            let strings: Vec<String> = (0..dict_size)
+                .map(|_| String::from_utf8(random_word(&mut rng, alpha)).unwrap())
+                .collect();
+            let items: Vec<(&str, u16)> = strings
+                .iter()
+                .map(|s| (s.as_str(), rng.below(65_536) as u16))
+                .collect();
+            let trie = Trie::build(&items).unwrap();
+            let mut searcher = Searcher::new();
+            for _ in 0..40 {
+                let base = strings[rng.below(dict_size as u64) as usize].as_bytes();
+                let ops = rng.below(5) as usize;
+                let q = mutate(&mut rng, base, alpha, ops);
+                for tsb in [false, true] {
+                    for ranking in [Ranking::Coarse, Ranking::Exact] {
+                        let cfg = SearchConfig {
+                            tsb,
+                            ranking,
+                            ..SearchConfig::high_recall()
+                        };
+                        let got: Vec<(u32, u16)> = searcher
+                            .search(&trie, &cm, &q, &cfg)
+                            .unwrap()
+                            .hits
+                            .iter()
+                            .map(|h| (h.id, h.cost))
+                            .collect();
+                        let want = oracle_topk(&trie, &cm, &q, cfg.budget, cfg.k, ranking);
+                        assert_eq!(
+                            got,
+                            want,
+                            "seed={seed} q={:?} tsb={tsb} ranking={ranking:?}",
+                            String::from_utf8_lossy(&q)
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
