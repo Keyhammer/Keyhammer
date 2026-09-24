@@ -1,3 +1,10 @@
+# Version updates. Security updates are a separate Dependabot feature and keep
+# arriving for every ecosystem in the repository, including the ones left out here.
+#
+# Left out on purpose until the bindings phase:
+#   - crates/node: the legacy Node binding is frozen (outside the workspace, not built by CI)
+#     and will be rewritten, so version bumps there would be unverified busywork.
+#   - criterion in legacy/: dev-only benchmark dependency of the frozen legacy engine.
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -5,26 +12,14 @@ updates:
     schedule: { interval: weekly, day: monday }
     labels: [dependencies]
     commit-message: { prefix: "chore(deps)" }
-    groups:
-      cargo-minor-patch: { update-types: [minor, patch] }
-  - package-ecosystem: cargo
-    directory: /crates/node
-    schedule: { interval: weekly, day: monday }
-    labels: [dependencies, "area: node"]
-    commit-message: { prefix: "chore(deps)" }
+    ignore:
+      - dependency-name: "criterion"
     groups:
       cargo-minor-patch: { update-types: [minor, patch] }
   - package-ecosystem: npm
     directory: /bench
     schedule: { interval: weekly, day: monday }
     labels: [dependencies, "area: bench"]
-    commit-message: { prefix: "chore(deps)" }
-    groups:
-      npm-minor-patch: { update-types: [minor, patch] }
-  - package-ecosystem: npm
-    directory: /crates/node
-    schedule: { interval: weekly, day: monday }
-    labels: [dependencies, "area: node"]
     commit-message: { prefix: "chore(deps)" }
     groups:
       npm-minor-patch: { update-types: [minor, patch] }
