@@ -43,9 +43,9 @@ marks "unreachable or over budget".
 | Transposition of two adjacent bytes | 12 |
 | Any edit at the first query byte | multiplied by 1.5 |
 
-**These values are provisional.** No calibration has been done, and the
-[M0 results](/docs/results) list the cost weighting among the untested
-hypotheses for why ranking quality is below the baseline.
+**These values are provisional.** No calibration has been done. How the cost
+weighting affects ranking quality, and what has and has not been tested, is
+discussed on the [Results](/docs/results) page.
 
 ## Weighted OSA rows in a narrow band
 
