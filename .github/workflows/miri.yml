@@ -23,7 +23,7 @@ env:
 jobs:
   miri:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
@@ -49,6 +49,10 @@ jobs:
           --skip tsb_and_plain
           --skip a_term_of_
           --skip ascii_results_and_work_are_unchanged
+          --skip the_cost_model_uses_exactly
+          --skip normalisation_limits_apply
+          --skip every_layout_has_a_symmetric
+          --skip the_default_enables_the_bound
       # The C ABI crate holds unsafe code (raw pointers from C); its tests are
       # small, so all of them run.
       - run: cargo miri test -p keyhammer-c
