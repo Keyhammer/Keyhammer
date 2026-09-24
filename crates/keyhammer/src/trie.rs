@@ -214,37 +214,166 @@ impl Trie {
     }
 
     /// The byte on the edge leading into node `v` (0 for the root).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `v` is not a node index, that is, if `v >= self.node_count()`.
+    /// Unlike [`Trie::term`], [`Trie::weight`] and [`Trie::input_index`], which
+    /// answer for an unknown id, the per-node accessors index directly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use keyhammer::trie::{NO_TERM, Trie};
+    /// let trie = Trie::build(&[("car", 9), ("cat", 4)]).unwrap();
+    /// // Nodes in breadth-first order: root, c, a, r, t.
+    /// assert_eq!(trie.node_count(), 5);
+    /// assert_eq!(trie.label(0), 0);
+    /// assert_eq!(trie.label(1), b'c');
+    /// assert_eq!(trie.label(4), b't');
+    /// ```
+    ///
+    /// An index past the last node panics:
+    ///
+    /// ```should_panic
+    /// # use keyhammer::trie::Trie;
+    /// let trie = Trie::build(&[("a", 1)]).unwrap();
+    /// trie.label(trie.node_count());
+    /// ```
     pub fn label(&self, v: usize) -> u8 {
         self.label[v]
     }
 
     /// The node indices of the children of `v`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `v` is not a node index, that is, if `v >= self.node_count()`.
+    /// Unlike [`Trie::term`], [`Trie::weight`] and [`Trie::input_index`], which
+    /// answer for an unknown id, the per-node accessors index directly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use keyhammer::trie::{NO_TERM, Trie};
+    /// let trie = Trie::build(&[("car", 9), ("cat", 4)]).unwrap();
+    /// // Nodes in breadth-first order: root, c, a, r, t.
+    /// assert_eq!(trie.node_count(), 5);
+    /// assert_eq!(trie.children(0), 1..2);
+    /// assert_eq!(trie.children(2), 3..5); // a -> r, t
+    /// assert!(trie.children(3).is_empty());
+    /// ```
     pub fn children(&self, v: usize) -> Range<usize> {
         let start = self.child_start[v] as usize;
         start..start + usize::from(self.child_count[v])
     }
 
     /// The id of the term that ends at `v`, or [`NO_TERM`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `v` is not a node index, that is, if `v >= self.node_count()`.
+    /// Unlike [`Trie::term`], [`Trie::weight`] and [`Trie::input_index`], which
+    /// answer for an unknown id, the per-node accessors index directly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use keyhammer::trie::{NO_TERM, Trie};
+    /// let trie = Trie::build(&[("car", 9), ("cat", 4)]).unwrap();
+    /// // Nodes in breadth-first order: root, c, a, r, t.
+    /// assert_eq!(trie.node_count(), 5);
+    /// assert_eq!(trie.term_id(0), NO_TERM);
+    /// assert_eq!(trie.term_id(3), 0); // "car"
+    /// assert_eq!(trie.term_id(4), 1); // "cat"
+    /// ```
     pub fn term_id(&self, v: usize) -> u32 {
         self.term_id[v]
     }
 
     /// The largest weight among the terms at or below `v`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `v` is not a node index, that is, if `v >= self.node_count()`.
+    /// Unlike [`Trie::term`], [`Trie::weight`] and [`Trie::input_index`], which
+    /// answer for an unknown id, the per-node accessors index directly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use keyhammer::trie::{NO_TERM, Trie};
+    /// let trie = Trie::build(&[("car", 9), ("cat", 4)]).unwrap();
+    /// // Nodes in breadth-first order: root, c, a, r, t.
+    /// assert_eq!(trie.node_count(), 5);
+    /// assert_eq!(trie.max_weight(0), 9);
+    /// assert_eq!(trie.max_weight(4), 4);
+    /// ```
     pub fn max_weight(&self, v: usize) -> u16 {
         self.max_weight[v]
     }
 
     /// The length of the shortest term at or below `v`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `v` is not a node index, that is, if `v >= self.node_count()`.
+    /// Unlike [`Trie::term`], [`Trie::weight`] and [`Trie::input_index`], which
+    /// answer for an unknown id, the per-node accessors index directly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use keyhammer::trie::Trie;
+    /// let trie = Trie::build(&[("a", 1), ("abc", 1)]).unwrap();
+    /// assert_eq!(trie.len_min(0), 1);
+    /// assert_eq!(trie.len_min(trie.children(0).start), 1);
+    /// ```
     pub fn len_min(&self, v: usize) -> u16 {
         self.len_min[v]
     }
 
     /// The length of the longest term at or below `v`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `v` is not a node index, that is, if `v >= self.node_count()`.
+    /// Unlike [`Trie::term`], [`Trie::weight`] and [`Trie::input_index`], which
+    /// answer for an unknown id, the per-node accessors index directly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use keyhammer::trie::Trie;
+    /// let trie = Trie::build(&[("a", 1), ("abc", 1)]).unwrap();
+    /// assert_eq!(trie.len_max(0), 3);
+    /// let a = trie.children(0).start;
+    /// assert_eq!(trie.len_max(a), 3);
+    /// ```
     pub fn len_max(&self, v: usize) -> u16 {
         self.len_max[v]
     }
 
     /// The character classes that appear on edges strictly below `v`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `v` is not a node index, that is, if `v >= self.node_count()`.
+    /// Unlike [`Trie::term`], [`Trie::weight`] and [`Trie::input_index`], which
+    /// answer for an unknown id, the per-node accessors index directly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use keyhammer::cost::class;
+    /// use keyhammer::trie::Trie;
+    /// let trie = Trie::build(&[("ab", 1)]).unwrap();
+    /// let a = trie.children(0).start;
+    /// assert_eq!(trie.below_mask(0), class(b'a') | class(b'b'));
+    /// assert_eq!(trie.below_mask(a), class(b'b')); // not its own edge
+    /// let b = trie.children(a).start;
+    /// assert_eq!(trie.below_mask(b), 0);
+    /// ```
     pub fn below_mask(&self, v: usize) -> u64 {
         self.below_mask[v]
     }
