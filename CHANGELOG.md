@@ -22,6 +22,9 @@ All notable changes to this project are documented here. The format follows
 - New `keyhammer` core crate (M0 prototype): keyboard-weighted cost model, flat
   trie, exact best-first search, and brute-force oracle tests.
 - CI workflow for the core crate.
+- `bench/js-competitors/`: a harness that runs the WebAssembly build in Node against MiniSearch,
+  Fuse.js, uFuzzy and fuzzysort, with its report `docs/benchmarks/competitors-js.md`; a CI job runs
+  a small smoke configuration of it.
 - `bench/` harnesses and the dataset fetch script.
 - `docs/papers.md` (reference check and prior art) and `docs/benchmarks/m0.md`
   (M0 benchmark results).

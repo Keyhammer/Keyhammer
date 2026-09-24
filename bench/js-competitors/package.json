@@ -1,0 +1,14 @@
+{
+  "name": "keyhammer-bench-js-competitors",
+  "private": true,
+  "type": "module",
+  "description": "Benchmark of the keyhammer WebAssembly build against JavaScript fuzzy-search libraries",
+  "license": "AGPL-3.0-or-later",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@leeoniya/ufuzzy": "1.0.19",
+    "fuse.js": "7.5.0",
+    "fuzzysort": "4.0.2",
+    "minisearch": "7.2.0"
+  }
+}

@@ -1,6 +1,6 @@
 // Generates website/docs/ (gitignored) from:
 //   - the hand-written pages in website/content/
-//   - four named files of the repository (the single source of truth)
+//   - named files of the repository (the single source of truth)
 // Only the files named below are copied. The docs/ folder of the repository is
 // never copied as a whole, so nothing else in it can reach the site.
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -17,9 +17,11 @@ const EDIT = 'https://github.com/Keyhammer/Keyhammer/edit/main/';
 // repo-relative source -> generated page
 const synced = [
   { src: 'docs/benchmarks/m0.md', slug: 'results', title: 'Results (M0 gate)', position: 3 },
-  { src: 'docs/papers.md', slug: 'prior-art', title: 'Prior art', position: 4 },
-  { src: 'CONTRIBUTING.md', slug: 'contributing', title: 'Contributing', position: 5 },
-  { src: 'CHANGELOG.md', slug: 'changelog', title: 'Changelog', position: 6 },
+  { src: 'docs/benchmarks/competitors.md', slug: 'competitors', title: 'Benchmark: Rust libraries', position: 4 },
+  { src: 'docs/benchmarks/competitors-js.md', slug: 'competitors-js', title: 'Benchmark: JavaScript libraries', position: 5 },
+  { src: 'docs/papers.md', slug: 'prior-art', title: 'Prior art', position: 6 },
+  { src: 'CONTRIBUTING.md', slug: 'contributing', title: 'Contributing', position: 7 },
+  { src: 'CHANGELOG.md', slug: 'changelog', title: 'Changelog', position: 8 },
 ];
 const siteRoutes = new Map(synced.map((s) => [s.src, `/docs/${s.slug}`]));
 
@@ -36,8 +38,7 @@ function rewriteTarget(target, srcPath) {
 
 // Limits of this regex-based rewriting: it also touches text inside code
 // fences, does not handle images nested in links, and does not handle
-// parentheses inside link targets. The four current sources contain no
-// relative links, so today it only has to leave them alone.
+// parentheses inside link targets. Relative links in the synced sources, if any, are rewritten.
 function rewriteLinks(text, srcPath) {
   // Inline links and images: [text](target "title") and ![alt](target).
   const inline = text.replace(
