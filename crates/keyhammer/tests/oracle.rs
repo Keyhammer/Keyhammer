@@ -76,7 +76,8 @@ fn check(seed: u64, alpha: u64, dict_size: usize, tsb: bool) {
             let ops = rng.below(4) as usize;
             mutate(&mut rng, base, alpha, ops)
         };
-        for (k, budget) in [(1usize, 16u16), (5, 32), (20, 24)] {
+        // Budgets 7 and 64 hit the band edges W = 0 and W = MAX_W (8).
+        for (k, budget) in [(1usize, 16u16), (5, 32), (20, 24), (3, 7), (10, 64)] {
             let cfg = SearchConfig {
                 k,
                 budget,

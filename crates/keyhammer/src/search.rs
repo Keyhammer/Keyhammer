@@ -250,7 +250,8 @@ fn lower_bound(
     lb
 }
 
-/// A reusable search context. Reusing it avoids per-query allocations once warm.
+/// A reusable search context. It keeps its priority queue and scratch buffers
+/// across queries; the returned [`Output`] is still allocated per query.
 #[derive(Default)]
 pub struct Searcher {
     heap: BinaryHeap<Entry>,
@@ -264,7 +265,6 @@ impl Searcher {
         Self::default()
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn push(
         &mut self,
         key: u64,
@@ -302,13 +302,14 @@ impl Searcher {
                 max: MAX_QUERY_LEN,
             });
         }
-        let w = usize::from(cfg.budget / cm.c_indel_min());
-        if w > MAX_W {
+        let max_budget = MAX_W as Cost * cm.c_indel_min();
+        if cfg.budget > max_budget {
             return Err(SearchError::BudgetTooLarge {
                 budget: cfg.budget,
-                max: MAX_W as Cost * cm.c_indel_min(),
+                max: max_budget,
             });
         }
+        let w = usize::from(cfg.budget / cm.c_indel_min());
         let mut out = Output {
             hits: Vec::new(),
             stats: Stats::default(),

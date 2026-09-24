@@ -102,14 +102,29 @@ fn a_tiny_node_limit_truncates_and_returns_a_correct_prefix() {
     let trie = words();
     let cm = CostModel::qwerty();
     let full = oracle_topk(&trie, &cm, b"hel", 32, 10);
-    let cfg = SearchConfig {
-        max_nodes: 3,
-        ..SearchConfig::default()
-    };
-    let out = Searcher::new().search(&trie, &cm, b"hel", &cfg).unwrap();
-    assert!(out.stats.truncated);
-    let got: Vec<(u32, u16)> = out.hits.iter().map(|h| (h.id, h.cost)).collect();
-    assert_eq!(got, full[..got.len()].to_vec());
+    assert!(full.len() >= 2, "the fixture needs at least two matches");
+    let mut saw_partial = false;
+    let mut saw_complete = false;
+    for max_nodes in 1..=trie.node_count() + 1 {
+        let cfg = SearchConfig {
+            max_nodes,
+            ..SearchConfig::default()
+        };
+        let out = Searcher::new().search(&trie, &cm, b"hel", &cfg).unwrap();
+        let got: Vec<(u32, u16)> = out.hits.iter().map(|h| (h.id, h.cost)).collect();
+        assert!(got.len() <= full.len(), "max_nodes={max_nodes}");
+        assert_eq!(got, full[..got.len()].to_vec(), "max_nodes={max_nodes}");
+        if got.len() < full.len() {
+            assert!(out.stats.truncated, "max_nodes={max_nodes}");
+        }
+        saw_partial |= !got.is_empty() && got.len() < full.len();
+        saw_complete |= got.len() == full.len() && !out.stats.truncated;
+    }
+    assert!(
+        saw_partial,
+        "no node limit produced a non-empty strict prefix"
+    );
+    assert!(saw_complete, "no node limit let the search complete");
 }
 
 #[test]
@@ -144,6 +159,36 @@ fn oversized_query_and_budget_are_typed_errors() {
     };
     let e = Searcher::new().search(&trie, &cm, b"a", &cfg).unwrap_err();
     assert!(matches!(e, SearchError::BudgetTooLarge { budget: 80, .. }));
+}
+
+#[test]
+fn the_reported_budget_limit_is_the_largest_accepted_budget() {
+    let trie = words();
+    let cm = CostModel::qwerty();
+    let probe = SearchConfig {
+        budget: u16::MAX,
+        ..SearchConfig::default()
+    };
+    let max = match Searcher::new().search(&trie, &cm, b"a", &probe) {
+        Err(SearchError::BudgetTooLarge { max, .. }) => max,
+        other => panic!("expected BudgetTooLarge, got {other:?}"),
+    };
+    let at_max = SearchConfig {
+        budget: max,
+        ..SearchConfig::default()
+    };
+    assert!(Searcher::new().search(&trie, &cm, b"a", &at_max).is_ok());
+    let over = SearchConfig {
+        budget: max + 1,
+        ..SearchConfig::default()
+    };
+    assert_eq!(
+        Searcher::new().search(&trie, &cm, b"a", &over).unwrap_err(),
+        SearchError::BudgetTooLarge {
+            budget: max + 1,
+            max
+        }
+    );
 }
 
 #[test]
