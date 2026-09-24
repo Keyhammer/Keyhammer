@@ -97,7 +97,7 @@ check('neighbouring key', s.hits[0]?.term === 'dog' && s.hits[0].cost === 12, JS
 
 // Case folding of the query, weight and default weight.
 const sw = search('SWIFT');
-check('query case folding', sw.hits[0]?.term === 'swift' && sw.hits[0].cost === 0 && sw.hits[0].weight === 7);
+check('query case folding, original text returned', sw.hits[0]?.term === 'Swift' && sw.hits[0].cost === 0 && sw.hits[0].weight === 7);
 check('duplicate keeps highest weight', search('java').hits[0]?.weight === 20);
 check('default weight 0', search('go').hits[0]?.weight === 0);
 
@@ -122,6 +122,64 @@ check('invalid utf-8 query', (() => {
 })());
 check('null pointer with length', (kh.kh_search(0, 5, 10, 32, 0) >>> 0) === ERR);
 check('empty query', search('').n !== ERR);
+
+
+// ---- Unicode normalisation (issue #67) ----
+check('unicode build', build('São Paulo\t9\nAção\t1\nação\t8\nStraße\t7\nÇ\t6\ń\nCrème Brûlée\t5') === 5);
+{
+  const first = (q, opts) => search(q, { ranking: 1, ...opts }).hits?.[0];
+  for (const [q, term] of [
+    ['sao paulo', 'São Paulo'],
+    ['SAO PAULO', 'São Paulo'],
+    ['SÃO PAULO', 'São Paulo'],
+    ['ACAO', 'ação'],
+    ['AÇÃO', 'ação'],
+    ['strasse', 'Straße'],
+    ['STRASSE', 'Straße'],
+    ['c', 'Ç'],
+    ['creme brulee', 'Crème Brûlée'],
+  ]) {
+    const h = first(q);
+    check(`unicode query ${q}`, h?.term === term && h.cost === 0, JSON.stringify(h));
+  }
+  check('unicode typo cost', first('sao paolo')?.cost === 16);
+  check('merged terms keep the highest weight', first('acao')?.weight === 8);
+  check('unicode query at limit', search('é'.repeat(128)).n !== ERR);
+  check('unicode query too long', search('é'.repeat(129)).n === ERR);
+  check('folded length counts', search('ß'.repeat(65)).n === ERR);
+  check('invalid utf-8 is still an error', (() => {
+    const p = kh.kh_alloc(2);
+    new Uint8Array(kh.memory.buffer, p, 2).set([0xc3, 0x28]);
+    const r = kh.kh_search(p, 2, 10, 32, 0) >>> 0;
+    kh.kh_free(p, 2);
+    return r === ERR;
+  })());
+  check('invalid utf-8 dictionary', (() => {
+    const p = kh.kh_alloc(2);
+    new Uint8Array(kh.memory.buffer, p, 2).set([0xc3, 0x28]);
+    const r = kh.kh_build(p, 2);
+    kh.kh_free(p, 2);
+    return r === 0;
+  })());
+}
+
+// Differential test against the Rust core: bindings/testdata/unicode_expected.tsv
+// is produced by the core alone (see the tests of bindings/c).
+{
+  const data = (name) =>
+    readFileSync(join(repo, 'bindings', 'testdata', name), 'utf8').split(/\r?\n/).filter((l) => l.length > 0);
+  const dictLines = data('unicode_dict.tsv');
+  const terms = dictLines.map((l) => l.split('\t')[0]);
+  check('shared dictionary loads', build(dictLines.join('\n')) > 40);
+  const cases = data('unicode_cases.tsv').map((l) => l.split('\t'));
+  const golden = data('unicode_expected.tsv');
+  check('golden has all cases', cases.length === golden.length && cases.length > 50);
+  cases.forEach(([q, budget, ranking], i) => {
+    const r = search(q, { budget: Number(budget), ranking: ranking === 'exact' ? 1 : 0 });
+    const got = r.hits.map((h) => `${terms.indexOf(h.term)}:${h.cost}:${h.weight}`).join(',');
+    check(`core case ${i} ${q}`, got === golden[i].split('\t')[1], `${got} vs ${golden[i]}`);
+  });
+}
 
 // Empty dictionaries and invalid text fail and drop the index.
 check('empty dictionary', build('') === 0);

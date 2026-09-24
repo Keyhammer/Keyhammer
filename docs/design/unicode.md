@@ -298,20 +298,24 @@ The results are in `docs/benchmarks/unicode.md`.
 
 ## 8. Bindings
 
-No binding code is changed here (their docs are updated); all still build and their tests pass.
+No binding code was changed with the core (issue #19). The bindings use it since issue #67:
 
-- **WebAssembly and Node** (Node is JavaScript over the wasm build): lower-case ASCII and
-  pass other text through. Non-ASCII text is now compared per code point instead of per
-  byte, without folding. Follow-up: build with `Trie::build_normalized` and search with
-  `search_text`, which changes their results for uppercase non-ASCII and accents, and
-  check the size gate.
-- **C** (`keyhammer-c`): same as wasm; `KH_MAX_QUERY_LEN` stays 128 bytes, a stricter
-  limit than the core's 128 code points. Follow-up: normalise, and decide whether the ABI
-  limit becomes code points (an ABI change under `docs/design/c-abi.md` rules).
-- **Python**: refuses non-ASCII terms and queries. Follow-up: lift the check and normalise.
+- **WebAssembly and Node** (Node is JavaScript over the wasm build): terms are built with
+  `Trie::build_normalized` and queries searched with `search_text`, default normaliser, so
+  `sao paulo` finds `São Paulo` and `ACAO` finds `ação`. Hits return the caller's original
+  text (through `Trie::input_index`), not the normalised form. The wasm module has no option
+  for the mode; the size gate held (18 155 to 19 559 bytes gzip, budget 20 480).
+- **C** (`keyhammer-c`): same, with `kh_index_build_ex` flags to turn the case or the diacritic
+  folding off. `KH_MAX_QUERY_LEN` counts code points after normalisation (the core's limit),
+  with a new `KH_MAX_QUERY_BYTES` (512) bound before decoding; `kh_hit.term` is the original text
+  and `kh_hit` gained `input_index`, so the ABI version is 2 (`docs/design/c-abi.md`).
+- **Python**: the non-ASCII refusal is lifted; `Index(items, fold_case=True,
+  fold_diacritics=True)`; `Hit.term` is the original text and `Hit.index` the input position.
 
-Lifting them is not a one-line change for any binding (each has tests and documents
-asserting today's behaviour), so it is left to the follow-up issue.
+Terms that are equal after normalisation are merged (highest weight, then first) in every
+binding. The bindings' tests read the same dictionary, queries and expected hits
+(`bindings/testdata`), whose expected file is produced by the core and checked for freshness
+by `cargo test -p keyhammer-c`.
 
 ## 9. Testing
 
@@ -342,7 +346,6 @@ docs. Measurements: `docs/benchmarks/unicode.md`.
 
 ## 10. Not done here (follow-ups)
 
-- Bindings (section 8).
 - Folding tables beyond Latin-1 and Latin Extended-A (Latin Extended-B and Additional,
   Greek, Cyrillic), NFC composition, a Turkic mode, removal of invisible characters.
 - Highlighting ranges (#32) beyond the mapping utilities.

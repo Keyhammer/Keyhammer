@@ -331,3 +331,278 @@ fn concurrent_searches_share_an_index() {
     }
     unsafe { kh_index_free(&mut idx) };
 }
+
+// ---- Unicode normalisation (issue #67) ----
+
+/// A hit as `(input_index, cost, weight, term)`.
+fn hits(r: &kh_results) -> Vec<(u32, u32, u32, String)> {
+    let t = terms(r);
+    (0..r.len)
+        .map(|i| {
+            // SAFETY: `hits` has `len` hits.
+            let h = unsafe { *r.hits.add(i) };
+            (h.input_index, h.cost, h.weight, t[i].clone())
+        })
+        .collect()
+}
+
+fn search_hits(
+    idx: *const kh_index,
+    q: &str,
+    cfg: *const kh_config,
+) -> Vec<(u32, u32, u32, String)> {
+    let (s, mut r) = search(idx, q.as_bytes(), cfg);
+    assert_eq!(s, kh_status::KH_OK, "{q:?}: {}", last_error());
+    let h = hits(&r);
+    unsafe { kh_results_free(&mut r) };
+    h
+}
+
+#[test]
+fn abi_is_version_2_with_input_index() {
+    assert_eq!(KH_ABI_VERSION, 2);
+    // Appending a u32 to kh_hit must not add tail padding on any target.
+    let words = 2 * size_of::<usize>() + 4 * size_of::<u32>();
+    assert_eq!(size_of::<kh_hit>(), words);
+    assert_eq!(KH_MAX_QUERY_BYTES, 4 * KH_MAX_QUERY_LEN);
+}
+
+#[test]
+fn hits_return_the_original_text_and_input_index() {
+    let items = [
+        entry("São Paulo", 5),
+        entry("coração", 3),
+        entry("Ação", 1),
+        entry("ação", 8),
+        entry("Ç", 2),
+        entry("Straße", 4),
+    ];
+    let mut idx = build(&items);
+    let mut n = 0usize;
+    unsafe { kh_index_len(idx, &mut n) };
+    assert_eq!(n, 5, "Ação and ação merge");
+    for (q, want) in [
+        ("sao paulo", (0, "São Paulo")),
+        ("SÃO PAULO", (0, "São Paulo")),
+        ("São Paulo", (0, "São Paulo")),
+        ("CORACAO", (1, "coração")),
+        ("ACAO", (3, "ação")), // the entry with the higher weight is kept
+        ("Ação", (3, "ação")),
+        ("c", (4, "Ç")),
+        ("STRASSE", (5, "Straße")),
+        ("straße", (5, "Straße")),
+    ] {
+        let h = search_hits(idx, q, ptr::null());
+        assert_eq!((h[0].0, h[0].3.as_str()), want, "{q}");
+        assert_eq!(h[0].1, 0, "{q}: an exact match after folding costs 0");
+    }
+    // A typo is one edit over the folded text.
+    let h = search_hits(idx, "sao paolo", ptr::null());
+    assert_eq!((h[0].3.as_str(), h[0].1), ("São Paulo", 16));
+    unsafe { kh_index_free(&mut idx) };
+}
+
+#[test]
+fn normalisation_flags() {
+    let items = [entry("Café", 1), entry("cafe", 1), entry("CAFE", 1)];
+    let build_ex = |flags: u32| {
+        let mut idx = ptr::null_mut();
+        let s = unsafe { kh_index_build_ex(items.as_ptr(), items.len(), flags, &mut idx) };
+        (s, idx)
+    };
+    // Default: all three are one term.
+    let (s, mut idx) = build_ex(0);
+    assert_eq!(s, kh_status::KH_OK);
+    let mut n = 0usize;
+    unsafe { kh_index_len(idx, &mut n) };
+    assert_eq!(n, 1);
+    unsafe { kh_index_free(&mut idx) };
+    // Keep case: the three differ by case only.
+    let (s, mut idx) = build_ex(KH_NORM_KEEP_CASE);
+    assert_eq!(s, kh_status::KH_OK);
+    unsafe { kh_index_len(idx, &mut n) };
+    assert_eq!(n, 3); // "Cafe" (accent folded), "cafe" and "CAFE"
+    let h = search_hits(idx, "CAFE", ptr::null());
+    assert_eq!((h[0].3.as_str(), h[0].1), ("CAFE", 0));
+    unsafe { kh_index_free(&mut idx) };
+    // Keep diacritics: é differs from e.
+    let (s, mut idx) = build_ex(KH_NORM_KEEP_DIACRITICS);
+    assert_eq!(s, kh_status::KH_OK);
+    unsafe { kh_index_len(idx, &mut n) };
+    assert_eq!(n, 2); // "café" and "cafe"
+    let h = search_hits(idx, "CAFÉ", ptr::null());
+    assert_eq!((h[0].3.as_str(), h[0].1), ("Café", 0));
+    unsafe { kh_index_free(&mut idx) };
+    // Unknown flags are refused and no handle is returned.
+    let (s, idx) = build_ex(4);
+    assert_eq!(s, kh_status::KH_ERR_INVALID_ARGUMENT);
+    assert!(idx.is_null());
+    assert!(last_error().contains("flags"));
+}
+
+#[test]
+fn query_limit_counts_code_points_after_normalisation() {
+    let mut idx = build(&[entry("é", 1)]);
+    // 128 two-byte code points: 256 bytes, accepted.
+    let ok = "é".repeat(KH_MAX_QUERY_LEN);
+    assert_eq!(search(idx, ok.as_bytes(), ptr::null()).0, kh_status::KH_OK);
+    let over = "é".repeat(KH_MAX_QUERY_LEN + 1);
+    assert_eq!(
+        search(idx, over.as_bytes(), ptr::null()).0,
+        kh_status::KH_ERR_QUERY_TOO_LONG
+    );
+    assert!(last_error().contains("code points"));
+    // 65 sharp s fold to 130 letters.
+    let sharp = "ß".repeat(65);
+    assert_eq!(
+        search(idx, sharp.as_bytes(), ptr::null()).0,
+        kh_status::KH_ERR_QUERY_TOO_LONG
+    );
+    // 128 four-byte code points is exactly KH_MAX_QUERY_BYTES: accepted.
+    let wide = "😀".repeat(KH_MAX_QUERY_LEN);
+    assert_eq!(wide.len(), KH_MAX_QUERY_BYTES);
+    assert_eq!(
+        search(idx, wide.as_bytes(), ptr::null()).0,
+        kh_status::KH_OK
+    );
+    // Beyond the byte limit it is refused before the bytes are looked at.
+    let junk = vec![0xffu8; KH_MAX_QUERY_BYTES + 1];
+    assert_eq!(
+        search(idx, &junk, ptr::null()).0,
+        kh_status::KH_ERR_QUERY_TOO_LONG
+    );
+    // Within the limit, invalid UTF-8 is still an error.
+    assert_eq!(
+        search(idx, &junk[..8], ptr::null()).0,
+        kh_status::KH_ERR_INVALID_UTF8
+    );
+    unsafe { kh_index_free(&mut idx) };
+}
+
+#[test]
+fn invalid_utf8_and_empty_normalised_terms_are_errors() {
+    let bad = [0xc3u8, 0x28];
+    let mut idx: *mut kh_index = ptr::null_mut();
+    let e = [kh_entry {
+        term: bad.as_ptr(),
+        len: 2,
+        weight: 1,
+    }];
+    assert_eq!(
+        unsafe { kh_index_build(e.as_ptr(), 1, &mut idx) },
+        kh_status::KH_ERR_INVALID_UTF8
+    );
+    assert!(idx.is_null());
+    // A lone combining acute accent folds to nothing.
+    let e = [entry("\u{301}", 1)];
+    assert_eq!(
+        unsafe { kh_index_build(e.as_ptr(), 1, &mut idx) },
+        kh_status::KH_ERR_EMPTY_TERM
+    );
+    assert!(idx.is_null());
+}
+
+const DICT: &str = include_str!("../../testdata/unicode_dict.tsv");
+const CASES: &str = include_str!("../../testdata/unicode_cases.tsv");
+const EXPECTED: &str = include_str!("../../testdata/unicode_expected.tsv");
+#[cfg(not(miri))]
+const EXPECTED_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../testdata/unicode_expected.tsv"
+);
+
+fn dict() -> Vec<(&'static str, u16)> {
+    DICT.lines()
+        .map(|l| {
+            let (t, w) = l.split_once('\t').unwrap();
+            (t, w.parse().unwrap())
+        })
+        .collect()
+}
+
+fn cases() -> Vec<(&'static str, u16, Ranking)> {
+    CASES
+        .lines()
+        .map(|l| {
+            let mut f = l.split('\t');
+            let q = f.next().unwrap();
+            let budget = f.next().unwrap().parse().unwrap();
+            let ranking = match f.next().unwrap() {
+                "coarse" => Ranking::Coarse,
+                "exact" => Ranking::Exact,
+                other => panic!("bad ranking {other}"),
+            };
+            (q, budget, ranking)
+        })
+        .collect()
+}
+
+/// The shared golden file, computed by the core alone: one line per case,
+/// `case TAB input_index:cost:weight,...`. Every binding's tests read this
+/// file. Regenerate it with `UPDATE_GOLDEN=1 cargo test -p keyhammer-c golden`.
+fn core_golden() -> String {
+    let items = dict();
+    let trie = Trie::build_normalized(&items, &Normalizer::new()).unwrap();
+    let cm = CostModel::qwerty();
+    let mut s = Searcher::new();
+    let mut out = String::new();
+    for (i, (q, budget, ranking)) in cases().into_iter().enumerate() {
+        let cfg = SearchConfig {
+            budget,
+            ranking,
+            ..SearchConfig::default()
+        };
+        let o = s.search_text(&trie, &cm, q, &cfg).unwrap();
+        let hits: Vec<String> = o
+            .hits
+            .iter()
+            .map(|h| format!("{}:{}:{}", trie.input_index(h.id), h.cost, h.weight))
+            .collect();
+        out.push_str(&format!("{i}\t{}\n", hits.join(",")));
+    }
+    out
+}
+
+#[test]
+fn golden_file_is_the_cores_output() {
+    let golden = core_golden();
+    // Miri has no file system access; the file is compared as compiled in.
+    #[cfg(not(miri))]
+    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+        std::fs::write(EXPECTED_PATH, &golden).unwrap();
+        return;
+    }
+    assert_eq!(
+        EXPECTED.replace("\r\n", "\n"),
+        golden,
+        "bindings/testdata/unicode_expected.tsv is stale: UPDATE_GOLDEN=1 cargo test -p keyhammer-c golden"
+    );
+    assert!(golden.lines().any(|l| l.contains(':')), "some hits");
+}
+
+#[test]
+fn the_c_abi_matches_the_core_on_the_shared_dictionary() {
+    let items = dict();
+    let entries: Vec<kh_entry> = items.iter().map(|&(t, w)| entry(t, w)).collect();
+    let mut idx = build(&entries);
+    let golden = core_golden();
+    for (i, ((q, budget, ranking), line)) in cases().into_iter().zip(golden.lines()).enumerate() {
+        let mut cfg = kh_config::defaults();
+        cfg.budget = u32::from(budget);
+        cfg.ranking = match ranking {
+            Ranking::Exact => KH_RANKING_EXACT,
+            _ => KH_RANKING_COARSE,
+        };
+        let got: Vec<String> = search_hits(idx, q, &cfg)
+            .iter()
+            .map(|(ii, c, w, term)| {
+                // The hit carries the caller's original text.
+                assert_eq!(term, items[*ii as usize].0, "case {i} {q:?}");
+                format!("{ii}:{c}:{w}")
+            })
+            .collect();
+        let want = line.split_once('\t').unwrap().1;
+        assert_eq!(got.join(","), want, "case {i}: {q:?}");
+    }
+    unsafe { kh_index_free(&mut idx) };
+}

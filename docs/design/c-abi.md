@@ -4,7 +4,7 @@
 small C interface over the core. It is meant as the one place where other
 languages (.NET, Go, Java, C++) attach: they wrap these functions instead of
 each binding the Rust API. The generated header is
-`bindings/c/include/keyhammer.h`. Status: ABI version 1, unpublished (the
+`bindings/c/include/keyhammer.h`. Status: ABI version 2, unpublished (the
 crate has `publish = false`); nothing below is a promise about releases yet,
 but the rules apply to every change from now on.
 
@@ -31,10 +31,19 @@ kh_index_free(&idx);
   accepted and returned unchanged. Terms are length-delimited, not C strings;
   a wrapper that turns a hit into a C string must use `term_len`.
 - **UTF-8 only**, passed as `(pointer, length)`; never NUL-terminated, invalid
-  UTF-8 is an error (`KH_ERR_INVALID_UTF8`). ASCII letters are lower-cased by
-  this layer, so hits return lower-cased terms. Other characters are compared
-  per code point, as in the core; the core's case and diacritic folding
-  (`docs/design/unicode.md`) is not used by the C ABI yet.
+  UTF-8 is an error (`KH_ERR_INVALID_UTF8`). Terms and queries are normalised
+  identically with the core's `Normalizer` (`docs/design/unicode.md`): by
+  default case and diacritics are folded, so `São Paulo` is found by
+  `sao paulo` and `ACAO` finds `ação`; `kh_index_build_ex` takes flags
+  (`KH_NORM_KEEP_CASE`, `KH_NORM_KEEP_DIACRITICS`) to turn either off, and
+  `kh_index_build` is `kh_index_build_ex` with no flags. Terms that are equal
+  after normalisation are merged (highest weight, then the first).
+- **Hits return the caller's text.** `kh_hit.term` is the entry as it was given
+  to the build (original case and accents), not the normalised form, and
+  `kh_hit.input_index` is the position of that entry in the `kh_entry` array.
+  The index keeps a copy of the original terms (the memory of the terms is
+  roughly doubled). The alternative, returning the normalised term, would
+  show callers text they never wrote and make `ß` come back as `ss`.
 - **Plain results.** `kh_results` is a struct with an array of `kh_hit`. A
   hit's `term` points into the index (no copy) and is valid until the index is
   freed; `kh_results_free` frees only the array.
@@ -48,7 +57,8 @@ kh_index_free(&idx);
 Every entry point checks its arguments before touching them: null pointers
 (`KH_ERR_NULL_POINTER`, except a null pointer with length 0, which is the empty
 string), entry counts or term lengths above `isize::MAX` in `kh_index_build` (`KH_ERR_INVALID_LENGTH`; `kh_search` reports an oversize query as `KH_ERR_QUERY_TOO_LONG` instead), UTF-8, term and
-query limits (65535 bytes per term, 128 bytes per query), `struct_size`,
+query limits (65535 bytes per term, 128 code points per query after
+normalisation, and at most `KH_MAX_QUERY_BYTES` = 512 bytes before it), `struct_size`,
 `ranking` and `budget`. What cannot be checked in C is not checked: a dangling
 or misaligned pointer, a length larger than the buffer, a freed handle. Those
 are the caller's contract, stated in each function's `# Safety` section.
@@ -96,6 +106,25 @@ context type can be added later without breaking this ABI). The last-error
 message is thread-local.
 
 ## ABI stability rules
+
+**Version 2.** Unicode normalisation changes the meaning of existing things, so
+`KH_ABI_VERSION` went from 1 to 2 in the same change (version 1 was never
+released, but the rule is applied as if it had been):
+
+- `kh_hit.term` is the caller's original text, no longer the ASCII-lower-cased
+  one, and `kh_hit` gained the appended field `input_index` (an output struct,
+  so this is a bump, not an additive change: rule 3).
+- `KH_MAX_QUERY_LEN` (128) counts code points after normalisation, no longer
+  bytes. It accepts more inputs than before, but it is a constant whose
+  meaning changed (rule 1). The new `KH_MAX_QUERY_BYTES` (4 x 128) bounds the
+  UTF-8 size that is refused before the buffer is read, since 128 code points
+  need at most 512 bytes. The core's own limit (`MAX_QUERY_LEN`, code points
+  of the normalised query) is the same number, so the C limit is no longer
+  stricter than the core's.
+- `kh_index_build_ex`, `KH_NORM_KEEP_CASE` and `KH_NORM_KEEP_DIACRITICS` are
+  additive.
+- `kh_config` is unchanged (the normaliser is chosen when the index is built,
+  not per search), and its reserved field stays as it was.
 
 Version: `KH_ABI_VERSION` (header constant) and `kh_abi_version()` (loaded
 library). A wrapper must compare them at start-up and refuse to run on a
@@ -146,7 +175,11 @@ provisional.
 ## What is tested
 
 - `bindings/c/src/tests.rs`: build/search/free, defaults, config fields,
-  lower-casing and duplicate handling, and every error path (null pointers,
+  normalisation (Portuguese, German and French terms, original text and
+  `input_index` in hits, the flags, the code point limit), a differential
+  test against the core on the shared dictionary in `bindings/testdata`
+  (the expected file is regenerated by `UPDATE_GOLDEN=1 cargo test -p keyhammer-c golden`
+  and checked for freshness on every run), duplicate handling, and every error path (null pointers,
   oversize lengths, invalid UTF-8, empty/oversize terms, query too long,
   unknown ranking, budget too large, bad `struct_size`, a forced panic,
   double free of an index and of results, concurrent searches).

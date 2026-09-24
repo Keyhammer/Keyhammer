@@ -11,11 +11,14 @@
 //! immutable `Index` built once, and top-k search. The core has no overlay
 //! (add/remove) and no serialisation yet, so neither does this binding.
 //!
-//! Terms and queries must be ASCII. ASCII letters are lower-cased (as in the
-//! WebAssembly binding); other ASCII characters are compared as they are by
-//! the core. The core compares code points and can fold case and diacritics
-//! (`keyhammer::text`), but this binding refuses non-ASCII text until it uses
-//! that folding (issue #67).
+//! Terms and queries are any Unicode text. They are normalised identically
+//! with the core's `keyhammer::text::Normalizer` (by default case and
+//! diacritics are folded: `São Paulo` is found by `sao paulo`, `ACAO` finds
+//! `ação`; `Index(..., fold_case=False)` and `fold_diacritics=False` turn a
+//! folding off). A hit's `term` is the text the caller gave (the entry that
+//! was kept among terms equal after normalisation) and `index` its position
+//! in `items`. Strings with lone surrogates cannot be encoded as UTF-8 and are
+//! rejected.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -25,6 +28,7 @@ use keyhammer::cost::CostModel;
 use keyhammer::search::{
     Ranking as CoreRanking, SearchConfig as CoreConfig, SearchError as CoreSearchError, Searcher,
 };
+use keyhammer::text::Normalizer;
 use keyhammer::trie::Trie;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -53,7 +57,7 @@ create_exception!(
     _keyhammer,
     QueryTooLongError,
     SearchError,
-    "The query is longer than 128 bytes."
+    "The query is longer than 128 code points (counted after normalisation)."
 );
 create_exception!(
     _keyhammer,
@@ -192,15 +196,16 @@ impl From<&SearchConfig> for CoreConfig {
 #[pyclass(module = "keyhammer", frozen, get_all, eq, hash, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Hit {
-    /// The matched term (lower-cased).
+    /// The matched term as it was given to `Index` (original case and
+    /// accents, not the normalised form).
     term: String,
     /// Exact weighted edit cost, fixed point (16 = one ordinary edit).
     cost: u16,
     /// The term's weight.
     weight: u16,
     /// Position in `items` of the entry that was kept (highest weight, first
-    /// among ties). Terms are lower-cased and deduplicated, so this is the
-    /// way to map a hit back to the caller's record.
+    /// among ties). Terms equal after normalisation are merged, so this is
+    /// the way to map a hit back to the caller's record.
     index: u32,
 }
 
@@ -241,17 +246,6 @@ impl SearchResult {
     }
 }
 
-/// Checks ASCII (non-ASCII is refused until issue #67) and lower-cases ASCII
-/// letters; the core compares other characters as they are.
-fn normalise(what: &str, s: &str) -> Result<String, String> {
-    if !s.is_ascii() {
-        return Err(format!(
-            "{what} {s:?} is not ASCII; only ASCII text is supported for now"
-        ));
-    }
-    Ok(s.to_ascii_lowercase())
-}
-
 /// An immutable index over `(term, weight)` pairs.
 ///
 /// Immutable after construction, so one instance can be searched from many
@@ -259,13 +253,23 @@ fn normalise(what: &str, s: &str) -> Result<String, String> {
 #[pyclass(module = "keyhammer", frozen)]
 struct Index {
     trie: Trie,
+    /// The terms as given, by position in `items` (`Trie::input_index`).
+    originals: Vec<String>,
     costs: CostModel,
 }
 
 #[pymethods]
 impl Index {
+    /// `fold_case` and `fold_diacritics` (both on by default) choose the
+    /// normalisation applied to terms and queries alike.
     #[new]
-    fn new(py: Python<'_>, items: &Bound<'_, PyAny>) -> PyResult<Self> {
+    #[pyo3(signature = (items, *, fold_case=true, fold_diacritics=true))]
+    fn new(
+        py: Python<'_>,
+        items: &Bound<'_, PyAny>,
+        fold_case: bool,
+        fold_diacritics: bool,
+    ) -> PyResult<Self> {
         let mut owned: Vec<(String, u16)> = Vec::new();
         for item in items.try_iter()? {
             let (term, weight): (Bound<'_, PyAny>, Bound<'_, PyAny>) =
@@ -291,17 +295,20 @@ impl Index {
                 Err(e) => return Err(e),
             };
             let weight = to_u16("weight", weight).map_err(BuildError::new_err)?;
-            let term = normalise("term", &term).map_err(BuildError::new_err)?;
             owned.push((term, weight));
         }
+        let normalizer = Normalizer::new()
+            .with_case_folding(fold_case)
+            .with_diacritic_folding(fold_diacritics);
         let trie = py
             .detach(|| {
                 let refs: Vec<(&str, u16)> = owned.iter().map(|(t, w)| (t.as_str(), *w)).collect();
-                Trie::build(&refs)
+                Trie::build_normalized(&refs, &normalizer)
             })
             .map_err(|e| BuildError::new_err(e.to_string()))?;
         Ok(Self {
             trie,
+            originals: owned.into_iter().map(|(t, _)| t).collect(),
             costs: CostModel::qwerty(),
         })
     }
@@ -311,8 +318,9 @@ impl Index {
         self.trie.len()
     }
 
-    /// Searches the index. Keyword arguments override `config`; without
-    /// either, the core defaults are used (k=10, budget=32, coarse ranking).
+    /// Searches the index. The query is normalised like the terms. Keyword
+    /// arguments override `config`; without either, the core defaults are
+    /// used (k=10, budget=32, coarse ranking).
     #[pyo3(signature = (query, k=None, budget=None, ranking=None, *, config=None))]
     fn search(
         &self,
@@ -348,9 +356,8 @@ impl Index {
                 e
             }
         })?;
-        let q = normalise("query", &query).map_err(SearchError::new_err)?;
         let out = py
-            .detach(|| Searcher::new().search(&self.trie, &self.costs, q.as_bytes(), &cfg))
+            .detach(|| Searcher::new().search_text(&self.trie, &self.costs, &query, &cfg))
             .map_err(|e| {
                 let msg = e.to_string();
                 match e {
@@ -364,7 +371,11 @@ impl Index {
                 .hits
                 .iter()
                 .map(|h| Hit {
-                    term: self.trie.term(h.id).to_owned(),
+                    term: self
+                        .originals
+                        .get(self.trie.input_index(h.id) as usize)
+                        .map_or_else(|| self.trie.term(h.id), String::as_str)
+                        .to_owned(),
                     cost: h.cost,
                     weight: h.weight,
                     index: self.trie.input_index(h.id),

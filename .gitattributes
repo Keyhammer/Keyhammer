@@ -1,1 +1,2 @@
 bindings/c/include/*.h text eol=lf
+bindings/testdata/* text eol=lf

@@ -7,6 +7,18 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- **Breaking (0.x):** the wasm, Node, C and Python bindings use the core's Unicode normalisation
+  (issue #67): terms are built with `Trie::build_normalized` and queries searched with
+  `search_text`, so case and diacritics are folded (`sao paulo` finds `São Paulo`, `ACAO` finds
+  `ação`, `strasse` finds `Straße`). Hits now return the caller's original text instead of the
+  ASCII-lower-cased one, and terms equal after folding are merged. Python no longer refuses
+  non-ASCII text and gains `Index(items, *, fold_case=True, fold_diacritics=True)`; the query limit
+  of the wasm, Node (`MAX_QUERY_BYTES` is now `MAX_QUERY_LENGTH`), C and Python bindings is 128 code
+  points after folding. C: `KH_ABI_VERSION` is 2 (`kh_hit.term` semantics, `kh_hit.input_index`
+  appended, `KH_MAX_QUERY_LEN` in code points), with the additions `kh_index_build_ex`,
+  `KH_NORM_KEEP_CASE`, `KH_NORM_KEEP_DIACRITICS` and `KH_MAX_QUERY_BYTES`. The wasm module grows
+  from 18 155 to 19 559 bytes gzip (`gzip -9 -n`, budget 20 480; one machine). All four bindings are
+  tested against one expected-results file produced by the core (`bindings/testdata`).
 - **Breaking (0.x):** the search alphabet is Unicode code points instead of UTF-8 bytes (issue #19).
   Terms are split into `char`s and byte queries are decoded as UTF-8 (a byte that is not valid
   UTF-8 becomes a symbol that matches no term), so `é` against `e` is one substitution, not two

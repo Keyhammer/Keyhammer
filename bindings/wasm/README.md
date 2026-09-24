@@ -14,20 +14,26 @@ any time.
 | `kh_alloc` | `(len: u32) -> *mut u8` | Allocates `len` bytes for JavaScript to fill. Returns 0 if the allocation fails. |
 | `kh_free` | `(ptr: *mut u8, len: u32)` | Frees a `kh_alloc` buffer; `len` must be the same. |
 | `kh_build` | `(ptr, len) -> u32` | Builds the index from UTF-8 text (format below). Returns the number of distinct terms, or 0 on failure; after a failure there is no index. |
-| `kh_search` | `(ptr, len, k: u32, budget: u32, ranking: u32) -> u32` | Searches for the UTF-8 query at `(ptr, len)`. `ranking`: 0 = `Coarse`, 1 = `Exact`. Returns the number of hits, or `u32::MAX` on error (no index, query longer than 128 bytes, budget too large, unknown ranking, invalid UTF-8). |
+| `kh_search` | `(ptr, len, k: u32, budget: u32, ranking: u32) -> u32` | Searches for the UTF-8 query at `(ptr, len)`. `ranking`: 0 = `Coarse`, 1 = `Exact`. The query is normalised like the terms. Returns the number of hits, or `u32::MAX` on error (no index, query longer than 128 code points after normalisation, budget too large, unknown ranking, invalid UTF-8). |
 | `kh_results_ptr` / `kh_results_len` | `() -> *const u8` / `() -> u32` | The results text of the last search (format below), valid until the next `kh_build` or `kh_search`. |
 
 Searches use `SearchConfig::default()`, subtree bound on.
 
 **Dictionary text** (`kh_build`): one term per line, optionally followed by
-`TAB weight` (0 to 65535, default 0). ASCII letters are lower-cased. Lines that
-are empty, longer than 65535 bytes or whose weight is not a valid number are
-skipped. Duplicates keep the highest weight.
+`TAB weight` (0 to 65535, default 0). Terms are normalised with the core's
+default `Normalizer` (case and diacritics folded: `São Paulo` is stored as
+`sao paulo`, `Straße` as `strasse`; policy in `docs/design/unicode.md`).
+Lines that are empty, longer than 65535 bytes, whose weight is not a valid
+number, or that normalise to nothing (only combining marks) are skipped.
+Terms that are equal after normalisation are merged (highest weight, then the
+first line).
 
 **Results text** (`kh_results_ptr`): a header line
 `nodes_expanded TAB truncated` (trie nodes expanded; `1` if the node limit
 stopped the search early, else `0`), then one line per hit, best first:
-`term TAB cost TAB weight`, where `cost` is the exact fixed-point cost (16 is
+`term TAB cost TAB weight`, where `term` is the text as given to `kh_build`
+(original case and accents, not the normalised form; for merged terms, the line
+that was kept) and `cost` is the exact fixed-point cost (16 is
 one ordinary edit). Every line ends with `\n`. After an error the text is
 empty.
 
@@ -65,18 +71,24 @@ cp target/wasm32-unknown-unknown/wasm/keyhammer_wasm.wasm website/static/wasm/ke
 
 ## Size
 
-Measured by CI: about 39 KB raw and about 17 KB gzip (level 9); the test prints
-the exact figures. The largest parts are the index build and the search with
+Measured on one machine with the CI flags: 45 771 bytes raw and 19 559 bytes
+with `gzip -9 -n` (what the CI size gate measures; the budget is 20 480), against
+42 506 and 18 155 before the normaliser was linked (+1 404 bytes gzip); the test
+prints the raw size and Node's zlib level 9 figure, which is a little larger
+(19 805). The increase is the folding tables and the code of the normaliser. The largest parts are the index build and the search with
 the core inlined, the `dlmalloc` allocator from `std`, the sort used to build
 the index, and the formatting code that panic locations in the core still pull
 in.
 
 ## Limits
 
-- ASCII letters are lower-cased; any other character is compared as it is,
-  one code point per symbol (the core's alphabet since issue #19). The core's
-  case and diacritic folding (`keyhammer::text`) is not used by this binding
-  yet, so `É` and `é` differ and `é` against `e` costs a substitution.
+- Case and diacritics are folded with the core's default normaliser only; there
+  is no option to turn either off. The tables cover Latin-1 and Latin
+  Extended-A (plus ligatures); other scripts are compared per code point as they
+  are (no Greek or Cyrillic case folding). The 128 code point query limit is
+  counted after folding (`ß` counts as two).
+- The module keeps a copy of the terms as given (to return them), so the
+  memory of the terms is roughly doubled.
 - The module holds a single index; `kh_build` replaces it.
 - The costs are provisional and uncalibrated.
 - `unsafe` is used only at the boundary (raw pointers from JavaScript), with a

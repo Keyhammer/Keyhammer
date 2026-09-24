@@ -1,0 +1,59 @@
+sao paulo	32	coarse
+SAO PAULO	32	coarse
+São Paulo	32	exact
+sao paolo	32	exact
+SÃO PAULO	32	exact
+acao	32	exact
+ACAO	32	coarse
+ACÇÃO	32	exact
+coracao	32	coarse
+CORAÇÃO	32	exact
+nao	32	exact
+NÃO	32	coarse
+pe	32	coarse
+onibus	32	exact
+ÔNIBUS	32	coarse
+c	32	exact
+Ç	32	exact
+maca	32	exact
+strasse	32	exact
+straße	32	exact
+STRASSE	32	coarse
+strase	48	exact
+muller	32	exact
+mueller	48	exact
+haeuser	48	coarse
+hauser	32	coarse
+madchen	32	exact
+uber	32	exact
+grosse	32	exact
+fussball	32	exact
+fusball	32	coarse
+cafe	32	exact
+CAFÉ	32	exact
+creme brulee	32	exact
+creme brule	48	exact
+eleve	32	exact
+francais	32	coarse
+francias	32	exact
+garcon	32	exact
+ou	32	exact
+zurich	32	exact
+zuerich	48	exact
+munchen	32	exact
+lodz	32	exact
+oeuvre	32	exact
+aero	32	coarse
+Привет	32	exact
+привет	32	exact
+Tokyo	32	exact
+東京	32	exact
+javasript	32	coarse
+TYPESCRIPT	32	exact
+fomr	32	exact
+fog	32	exact
+xyzxyz	32	coarse
+sao	64	coarse
+rio de janero	48	exact
+brasilia	32	exact
+belo horizont	32	exact

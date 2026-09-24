@@ -79,7 +79,7 @@ together when that stops being useful.
 
 - Errors: argument problems throw `TypeError` or `RangeError` before the engine
   runs (a term with a tab or line break would corrupt the text format; an empty
-  dictionary, a query over 128 bytes, a budget over 64 are refused by the
+  dictionary, a query over 128 code points, a budget over 64 are refused by the
   engine, but a JavaScript error with a message is better than `u32::MAX`).
   `KeyhammerError` covers engine failures that get through, and a missing
   module.
