@@ -1,0 +1,45 @@
+# cargo-deny configuration (https://embarkstudios.github.io/cargo-deny/).
+# Run: cargo deny check
+#
+# Scope: the main workspace only (Cargo.lock at the repository root). These
+# manifests are excluded from it, have their own lockfiles and are NOT covered
+# by this check:
+#   - crates/keyhammer/fuzz: cargo-fuzz harness, built only by the fuzz workflow.
+#   - crates/node: the Node.js binding, its own workspace.
+#   - bench/competitors: pulls third-party search crates only for comparison and
+#     is never shipped.
+# Their dependencies are not vetted here and the allow list below is not widened
+# for them.
+
+[graph]
+all-features = true
+
+[licenses]
+# Keyhammer is AGPL-3.0-or-later. Only licences that can be combined into an
+# AGPL-3.0-or-later work are allowed.
+allow = [
+    "AGPL-3.0-or-later",
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+# Cargo.lock lists 72 packages, but the check reports only the 4 AGPL crates
+# (the workspace's own) plus the licences of the permitted dev-dependencies. The
+# permissive licences below are allowed so that a new dependency using one does
+# not need a config change; do not add others without a licence review.
+unused-allowed-license = "allow"
+
+[advisories]
+yanked = "deny"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -69,6 +69,32 @@ jobs:
           remap="$remap --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
           RUSTFLAGS="$remap" cargo build -p keyhammer-wasm --target wasm32-unknown-unknown --profile wasm
       - run: node bindings/wasm/test.mjs
+      # Size gate: fails if the gzipped module grows past the budget. The
+      # budget is 20 KB (20480 bytes) against about 16.7 KB today; to raise it,
+      # change WASM_GZIP_BUDGET below in a pull request that says why. The
+      # project goal is to stay under 50 KB.
+      - name: wasm size gate
+        env:
+          WASM_GZIP_BUDGET: "20480"
+        run: |
+          f=target/wasm32-unknown-unknown/wasm/keyhammer_wasm.wasm
+          size=$(gzip -9 -n -c "$f" | wc -c)
+          echo "gzipped wasm: $size bytes (budget $WASM_GZIP_BUDGET)"
+          echo "gzipped wasm: $size bytes (budget $WASM_GZIP_BUDGET)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$size" -gt "$WASM_GZIP_BUDGET" ]; then
+            echo "::error::gzipped wasm $size B exceeds budget $WASM_GZIP_BUDGET B; shrink it or raise WASM_GZIP_BUDGET in a PR that says why"
+            exit 1
+          fi
+
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      # Pinned to a commit (the v2.1.1 tag), verified with `gh api`.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
+        with:
+          command: check
 
   bench-competitors:
     runs-on: ubuntu-latest
