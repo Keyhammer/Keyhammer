@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["legacy"]
+members = ["legacy", "crates/keyhammer"]
 exclude = ["crates/node"]
 
 [workspace.lints.rust]
