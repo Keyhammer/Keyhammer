@@ -81,3 +81,39 @@ fn non_ascii_bytes_are_kept_verbatim() {
     assert_eq!(t.len(), 2);
     assert!((0..2u32).any(|i| t.term(i) == "café"));
 }
+
+#[test]
+fn input_index_reports_the_kept_duplicate_with_the_highest_weight() {
+    // sample(): ("cat", 5) at index 0 and ("cat", 7) at index 4.
+    let t = sample();
+    assert_eq!(t.term(2), "cat");
+    assert_eq!(t.weight(2), 7);
+    assert_eq!(t.input_index(2), 4);
+}
+
+#[test]
+fn input_index_keeps_the_first_of_equal_weight_duplicates() {
+    let t = Trie::build(&[("b", 1), ("a", 3), ("b", 3), ("a", 3), ("b", 3)]).unwrap();
+    assert_eq!((t.term(0), t.term(1)), ("a", "b"));
+    assert_eq!(t.input_index(0), 1);
+    assert_eq!(t.input_index(1), 2);
+}
+
+#[test]
+fn input_index_maps_sorted_positions_back_to_the_input() {
+    let items = [("delta", 1), ("alpha", 2), ("charlie", 3), ("bravo", 4)];
+    let t = Trie::build(&items).unwrap();
+    let back: Vec<u32> = (0..t.len() as u32).map(|id| t.input_index(id)).collect();
+    assert_eq!(back, [1, 3, 2, 0]);
+    for id in 0..t.len() as u32 {
+        let (term, weight) = items[t.input_index(id) as usize];
+        assert_eq!((t.term(id), t.weight(id)), (term, weight));
+    }
+}
+
+#[test]
+fn input_index_of_an_out_of_range_id_is_u32_max() {
+    let t = sample();
+    assert_eq!(t.input_index(t.len() as u32), u32::MAX);
+    assert_eq!(t.input_index(u32::MAX), u32::MAX);
+}
