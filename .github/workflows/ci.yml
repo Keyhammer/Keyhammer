@@ -160,17 +160,17 @@ jobs:
         run: |
           cargo build -p keyhammer-c --release
           lib=$PWD/target/release
-          cc -std=c99 -Wall -Wextra -Werror -Ibindings/c/include bindings/c/tests/smoke.c             -L"$lib" -lkeyhammer_c -Wl,-rpath,"$lib" -o "$RUNNER_TEMP/smoke"
+          cc -std=c99 -Wall -Wextra -Werror -Ibindings/c/include bindings/c/tests/smoke.c \
+            -L"$lib" -lkeyhammer_c -Wl,-rpath,"$lib" -o "$RUNNER_TEMP/smoke"
           "$RUNNER_TEMP/smoke"
       # The header must also work as C++: a translation unit is compiled,
       # linked against the library and run.
       - name: header compiles and runs as C++
         run: |
           lib=$PWD/target/release
-          printf '#include "keyhammer.h"
-int main() { return kh_abi_version() == KH_ABI_VERSION ? 0 : 1; }
-' > "$RUNNER_TEMP/h.cpp"
-          c++ -std=c++17 -Wall -Wextra -Werror -Ibindings/c/include "$RUNNER_TEMP/h.cpp"             -L"$lib" -lkeyhammer_c -Wl,-rpath,"$lib" -o "$RUNNER_TEMP/hcpp"
+          printf '%s\n' '#include "keyhammer.h"' 'int main() { return kh_abi_version() == KH_ABI_VERSION ? 0 : 1; }' > "$RUNNER_TEMP/h.cpp"
+          c++ -std=c++17 -Wall -Wextra -Werror -Ibindings/c/include "$RUNNER_TEMP/h.cpp" \
+            -L"$lib" -lkeyhammer_c -Wl,-rpath,"$lib" -o "$RUNNER_TEMP/hcpp"
           "$RUNNER_TEMP/hcpp"
 
   deny:
