@@ -18,6 +18,10 @@ All notable changes to this project are documented here. The format follows
 - `Trie::input_index`: maps a term id (a position in the sorted,
   deduplicated list) back to the index in the input slice of the entry that
   was kept.
+- `trie::BuildError::TooManyTerms`: `Trie::build` returns it instead of
+  wrapping when given more than `u32::MAX` terms.
+- `docs/design/lower-bound.md`: a written proof that the search's lower bound
+  is admissible, with what the tests check and what is only argued.
 
 ### Changed
 - License changed from MIT to AGPL-3.0-or-later, effective from the commit

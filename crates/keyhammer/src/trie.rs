@@ -28,6 +28,9 @@ pub enum BuildError {
     EmptyTerm,
     /// A term is longer than 65535 bytes.
     TermTooLong,
+    /// More than `u32::MAX` terms were given: term ids and input indices are
+    /// `u32`, and `u32::MAX` itself is reserved for [`NO_TERM`].
+    TooManyTerms,
 }
 
 impl fmt::Display for BuildError {
@@ -36,7 +39,17 @@ impl fmt::Display for BuildError {
             BuildError::Empty => f.write_str("cannot build an index from an empty term list"),
             BuildError::EmptyTerm => f.write_str("terms must not be empty"),
             BuildError::TermTooLong => f.write_str("terms must be at most 65535 bytes"),
+            BuildError::TooManyTerms => f.write_str("an index holds at most 4294967295 terms"),
         }
+    }
+}
+
+/// Converts a term position or input index to `u32`, refusing values that do
+/// not fit or that would equal [`NO_TERM`].
+fn index_u32(i: usize) -> Result<u32, BuildError> {
+    match u32::try_from(i) {
+        Ok(v) if v != NO_TERM => Ok(v),
+        _ => Err(BuildError::TooManyTerms),
     }
 }
 
@@ -79,8 +92,8 @@ impl Trie {
         let mut pairs: Vec<(&str, u16, u32)> = items
             .iter()
             .enumerate()
-            .map(|(i, &(t, w))| (t, w, i as u32))
-            .collect();
+            .map(|(i, &(t, w))| Ok((t, w, index_u32(i)?)))
+            .collect::<Result<_, BuildError>>()?;
         pairs.sort_by(|a, b| {
             a.0.as_bytes()
                 .cmp(b.0.as_bytes())
@@ -100,7 +113,7 @@ impl Trie {
         queue.push_back((0, 0, bytes.len(), 0));
         while let Some((node, mut lo, hi, depth)) = queue.pop_front() {
             if bytes[lo].len() == depth {
-                term_id[node] = lo as u32;
+                term_id[node] = index_u32(lo)?;
                 lo += 1;
             }
             let first_child = label.len() as u32;
@@ -234,5 +247,20 @@ impl Trie {
     /// The character classes that appear on edges strictly below `v`.
     pub fn below_mask(&self, v: usize) -> u64 {
         self.below_mask[v]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_conversion_refuses_what_does_not_fit_or_equals_no_term() {
+        assert_eq!(index_u32(0), Ok(0));
+        assert_eq!(index_u32(NO_TERM as usize - 1), Ok(NO_TERM - 1));
+        assert_eq!(index_u32(NO_TERM as usize), Err(BuildError::TooManyTerms));
+        if let Some(big) = (NO_TERM as usize).checked_add(1) {
+            assert_eq!(index_u32(big), Err(BuildError::TooManyTerms));
+        }
     }
 }

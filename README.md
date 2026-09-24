@@ -109,6 +109,7 @@ previous ordering by exact cost the gain is significant (+0.015, +0.028 and
 - `crates/node`: Node.js binding of the legacy engine, used by the JS comparison.
 - `bench/`: data preparation, the Rust harness and the JS comparison.
 - `docs/`: benchmark reports and prior-art notes.
+- `docs/design/`: written proofs, currently the lower bound of the search.
 
 ## Development
 

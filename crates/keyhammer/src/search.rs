@@ -815,8 +815,9 @@ mod tests {
                         let ops = rng.below(4);
                         mutate(&mut rng, base, alpha, ops)
                     };
-                    // Band half-widths W = 0, 2, 4 and 8.
-                    for budget in [7, 16, 32, 64] {
+                    // Band half-widths W = 0 to 6 and 8, with budgets that are not
+                    // multiples of 16.
+                    for budget in [7, 15, 16, 24, 31, 32, 40, 48, 64] {
                         check_instance(&trie, &cm, &q, budget, tsb, &mut cov);
                     }
                 }

@@ -84,17 +84,28 @@ amount; only insertions and deletions change `i - j`, each by one. So a path to
 The search stores, for node `v` at depth `j`, the array `R_v[0..=2W]` where
 cell `k` stands for the query prefix length `i = j + k - W` (so
 `k = i - j + W`). Cells with `i < 0` or `i > m` are never written and stay
-`INF`. `root_row` fills row 0 with the cumulated deletion costs and
-`child_row` fills row `j + 1` from the parent's row `cur` (row `j`) and the
-grandparent's row `prev` (row `j - 1`). The index arithmetic matches the
-recurrence:
+`INF`. `root_row` fills row 0 with the cumulated deletion costs.
 
-- substitution reads `cur[k]` (row `j`, query length `i - 1`),
-- insertion reads `cur[k + 1]` (row `j`, query length `i`), with the previous
-  term byte `label(v)` when `j >= 1`,
-- deletion reads `out[k - 1]` (the same row, query length `i - 1`),
-- transposition reads `prev[k]` (row `j - 1`, query length `i - 2`) under the
-  same byte conditions, with `t[j-2] = label(v)` and `t[j-1]` the child's label.
+`child_row` is called while expanding `v` (at depth `j`, the `depth` argument)
+and fills the row of a child `c` of `v`, which is row `j + 1`. Its inputs are
+`v`'s row `cur` (row `j`) and the row `prev` of `v`'s parent (row `j - 1`,
+used only when `j >= 1`). On the path to `c`, the term bytes are
+`t[j - 1] = label(v)` (when `j >= 1`) and `t[j] = label(c)`. In the output
+row, cell `k` stands for the query length `i = (j + 1) + k - W`. The index
+arithmetic then matches the recurrence at cell `(i, j + 1)`:
+
+- substitution reads `cur[k]`: row `j`, query length `j + k - W = i - 1`,
+  cost `sub_cost(q[i-1], t[j], i-1)`;
+- insertion reads `cur[k + 1]`: row `j`, query length `i`, cost
+  `ins_cost(t[j], t[j-1], i)`, with `t[j-1] = label(v)` passed as the previous
+  term byte when `j >= 1` and no previous byte when `j = 0`;
+- deletion reads `out[k - 1]`: row `j + 1` itself, query length `i - 1`, cost
+  `del_cost(q, i-1)`;
+- transposition reads `prev[k]`: row `j - 1`, query length
+  `(j - 1) + k - W = i - 2`, when `j >= 1`, `i >= 2`, `q[i-1] == t[j-1]`
+  (`label(v)`), `q[i-2] == t[j]` (`label(c)`) and `q[i-1] != q[i-2]`, cost
+  `transpose_cost(i-2)`. These are the conditions of the recurrence for row
+  `j + 1`, whose two last term bytes are `t[j-1]` and `t[j]`.
 
 Every computed value `x` is replaced by `cap(x) = x if x <= B, else INF`, with
 `INF = 30000 > B`, and a predecessor cell equal to `INF` is ignored.
@@ -169,6 +180,13 @@ costs at least `c_transpose_min`. So
 `LB(v) <= P[k'] + c_transpose_min <= c`. No signature term is added in this
 case, so it holds with `tsb` on or off. ∎
 
+The skip term is deliberately simple: it takes the smallest finite cell of `P`
+plus the cheapest transposition and adds no signature term, because the
+skipping transposition also consumes `t[j-1] = label(v)`, which
+`below_mask(v)` does not cover, so the argument of section 3 would have to be
+adapted to the cell `(i, j + 1)`. Omitting a non-negative term
+can only lower the bound, so this is conservative, not wrong.
+
 Only terms within the budget are covered. For a term with `cost(t) > B` the
 theorem claims nothing, and none is needed: such a term is never reported.
 
@@ -231,19 +249,15 @@ use `|C|` distinct steps, each costing at least `c_min`:
 lower bounds on the same quantity, so `max(T_comp(k), T_let(k)) <= S`, which is
 what Case A needs.
 
-**Why a sum is not justified.** `T_comp + T_let <= S` would need the steps
-charged by `T_comp` and those charged by `T_let` to be disjoint, and they are
-not: a deletion of a query byte whose class is missing counts toward the length
-gap and toward the missing classes. With a cost model where every step costs 1
-(so `c_indel_min = c_min = 1`), the query `ax` and the single term `a` give, at
-the root, cells `i = 0` (`0 + 1 + 1`), `i = 1` (`1 + 0 + 1`) and `i = 2`
-(`2 + 1 + 0`), so the summed bound is 2 while `cost(a) = 1` (the `max` bound
-is 1, at `i = 0`). That model is only a thought experiment: `CostModel`
-currently has one fixed set of costs, and with those costs the property test
-did not find a case where the sum overestimates (one plausible reason: a
-non-doubled deletion there costs 16, twice `c_indel_min`). We make no claim
-either way for the sum under the current costs; the implementation uses `max`,
-which the argument above proves for any non-negative step costs.
+**Why `max` and not a sum (argued, untested).** `max` is used because the
+argument above makes it valid for any cost model with the stated minimum
+costs, and it needs no reasoning about whether one edit can be charged by both
+terms (a deletion of a query byte whose class is missing, for example, shortens
+the length gap and removes a missing class at once). A sum `T_comp + T_let`
+would need such a reasoning. Under the current `CostModel::qwerty()` costs a sum
+is not known to be inadmissible: the property test did not find a case where
+it overestimates, but this was not proved either way. A sum would be a possibly
+tighter bound, worth a separate change with its own proof and test.
 
 **Class collisions only loosen the bound.** Classes are `b & 63`, so distinct
 bytes can share a class (for example `!` (33) and `a` (97)). The lowercase
@@ -266,7 +280,9 @@ therefore never remove the cell that the proof needs for a within-budget term.
 
 **Key.** `pack(rank, weight, id)` builds the `u64`
 `rank << 48 | (65535 - weight) << 32 | id`. The three fields occupy disjoint
-bits (`rank <= INF < 2^16`, `weight` is `u16`, `id` is `u32`), so the integer
+bits (`pack` takes `rank` and `weight` as `u16` and `id` as `u32`; moreover a
+node or terminal is only pushed when its bound or cost is at most `B`, so the
+ranks in the queue are small), so the integer
 order is the lexicographic order on `(rank, 65535 - weight, id)`. A terminal
 for term `t` gets `key(t) = pack(rank(cost(t)), weight(t), t)`. A node `v` gets
 `pack(rank(LB(v)), max_weight(v), 0)`. `Entry` reverses the order, so the
@@ -325,23 +341,30 @@ Tested (`crates/keyhammer/src/search.rs`, module `tests`, run by
   the alphabets `aqw`,
   `asdfqwer`, `a..=z` and the colliding `ab!"`; 8 queries each (a quarter fully
   random of length 0 to 10, the rest a dictionary entry with 0 to 3 random
-  edits); budgets 7, 16, 32 and 64 (`W = 0, 2, 4, 8`). That is 19,200 cases per
-  mode.
+  edits); budgets 7, 15, 16, 24, 31, 32, 40, 48 and 64 (`W = 0, 1, 2, 3, 3, 4,
+  5, 6, 8`, including budgets that are not multiples of 16). That is 43,200
+  cases per mode.
 - In each case, every trie node, not only those the search reaches, gets its
   row and bound through `Expander`, the same code path that `search` uses. For
   every node with a within-budget term at or below it, the test asserts
   `LB(v) <= min cost` (against an independent full-matrix oracle) and
   `key(v) <= key(t)` for both rankings. At every terminal it asserts terminal
   exactness: the reported cost equals the oracle cost when within budget, and
-  nothing is reported otherwise. Per mode this checks 621,184 nodes (118,981
-  of them with a within-budget term below) and 174,464 terminals (34,561
-  within budget).
+  nothing is reported otherwise. Per mode this checks 1,397,664 nodes
+  (258,928 of them with a within-budget term below) and 392,544 terminals
+  (75,015 within budget).
 - These mutations make the test fail: adding 1 to the signature term;
   dropping the transposition-skip term; building `below_mask` from the node's
-  own label instead of its children's labels; removing a class from
-  `below_mask`. Adding the node's own label to `below_mask` on top of the
-  correct mask does not make it fail, and should not: it only adds classes,
-  which loosens the bound (section 3).
+  own label instead of its children's labels (an inadmissible variant: the
+  children's classes can go missing); removing a class from `below_mask`.
+- Adding the node's own label to `below_mask` on top of the correct mask does
+  not make the property test fail, and by construction it cannot: a larger
+  class set shrinks the set of missing classes, so `T_let` drops and `LB(v)`
+  drops, and an admissibility test only fails when a bound rises. That variant
+  is a loosening, not an error, and it is caught by the structural tests
+  `a_terminal_node_counts_its_own_length` and
+  `aggregates_cover_the_whole_subtree` in `tests/trie.rs`, which assert exact
+  values of `below_mask`.
 - End to end, `tests/oracle.rs` compares the hits of `search` with a
   brute-force top-k for both rankings and both `tsb` modes.
 
@@ -352,8 +375,8 @@ Only argued here:
 - The best-first argument of section 5 (invariant, finality of the first
   terminal popped, termination, truncation). It is exercised indirectly by
   `tests/oracle.rs`, not checked step by step.
-- That a sum of the two signature terms is not a valid bound in general
-  (section 3): shown only for a hypothetical unit-cost model.
+- Whether a sum of the two signature terms would also be admissible (section
+  3): neither proved nor refuted; the implementation uses `max`.
 - That the theorem holds for other cost numbers: the proof uses only the
   minimum step costs `c_indel_min`, `c_transpose_min` and `c_min`, but only the
   current `CostModel::qwerty()` is tested.
