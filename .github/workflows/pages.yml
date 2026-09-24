@@ -1,0 +1,90 @@
+name: pages
+
+# Builds the documentation site (mdBook + rustdoc). Pull requests only build
+# it; publishing happens on push to main and on manual dispatch, and needs
+# GitHub Pages enabled with the "GitHub Actions" source.
+on:
+  pull_request:
+    paths:
+      - "book/**"
+      - "docs/**"
+      - "crates/keyhammer/**"
+      - ".github/workflows/pages.yml"
+      - "*.md"
+  push:
+    branches: [main]
+    paths:
+      - "book/**"
+      - "docs/**"
+      - "crates/keyhammer/**"
+      - ".github/workflows/pages.yml"
+      - "*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  MDBOOK_VERSION: v0.5.4
+  # SHA-256 of mdbook-v0.5.4-x86_64-unknown-linux-gnu.tar.gz
+  MDBOOK_SHA256: 3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # mdBook is installed from the official release binary, pinned by version
+      # and verified against a SHA-256 checksum. This is faster than
+      # `cargo install` and avoids a third-party install action.
+      - name: Install mdBook
+        run: |
+          set -euo pipefail
+          url="https://github.com/rust-lang/mdBook/releases/download/${MDBOOK_VERSION}/mdbook-${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL "$url" -o mdbook.tar.gz
+          echo "${MDBOOK_SHA256}  mdbook.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/mdbook"
+          tar -xzf mdbook.tar.gz -C "$RUNNER_TEMP/mdbook"
+          echo "$RUNNER_TEMP/mdbook" >> "$GITHUB_PATH"
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: stable
+
+      - name: Build the book
+        run: mdbook build book
+
+      # The book links to ./api/keyhammer/index.html, which does not exist in
+      # a plain `mdbook build`: rustdoc output is copied in here.
+      - name: Build the API reference
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc -p keyhammer --no-deps
+          mkdir -p book/book/api
+          cp -r target/doc/. book/book/api/
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: book/book
+
+  deploy:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
