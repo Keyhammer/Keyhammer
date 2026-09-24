@@ -1,13 +1,12 @@
 diff --git a/crates/keyhammer/src/cost.rs b/crates/keyhammer/src/cost.rs
-index 803ed76..0b9727a 100644
+index 59bdf6b..543eee7 100644
 --- a/crates/keyhammer/src/cost.rs
 +++ b/crates/keyhammer/src/cost.rs
-@@ -319,16 +319,61 @@ pub struct CostModel {
-     indel: Cost,
-     indel_double: Cost,
-     transpose: Cost,
-+    first_quarters: Cost,
+@@ -434,15 +434,60 @@ pub struct CostModel {
      adjacent: [u32; 26],
+     /// Neighbour pairs that involve a key outside `a`-`z`.
+     extra: &'static [(u32, u32)],
++    first_quarters: Cost,
  }
  
 -/// Edits on the first query byte are less likely, so they cost 1.5x.
@@ -68,15 +67,15 @@ index 803ed76..0b9727a 100644
      /// The default model with a QWERTY keyboard. Same as
      /// `CostModel::for_layout(Layout::Qwerty)`.
      pub fn qwerty() -> Self {
-@@ -370,6 +415,7 @@ impl CostModel {
-             indel: 16,
-             indel_double: 8,
+@@ -490,6 +535,7 @@ impl CostModel {
              transpose: 12,
-+            first_quarters: 6,
              adjacent,
+             extra,
++            first_quarters: 6,
          }
      }
-@@ -391,7 +437,7 @@ impl CostModel {
+ 
+@@ -519,7 +565,7 @@ impl CostModel {
          } else {
              self.sub
          };
@@ -84,9 +83,9 @@ index 803ed76..0b9727a 100644
 +        self.at_start(base, qpos)
      }
  
-     /// Cost of deleting the query byte at `qpos` (the user typed an extra byte).
-@@ -399,7 +445,7 @@ impl CostModel {
-     pub fn del_cost(&self, q: &[u8], qpos: usize) -> Cost {
+     /// Cost of deleting the query symbol at `qpos` (the user typed an extra one).
+@@ -527,7 +573,7 @@ impl CostModel {
+     pub fn del_cost<S: PartialEq>(&self, q: &[S], qpos: usize) -> Cost {
          let doubled =
              qpos > 0 && matches!((q.get(qpos), q.get(qpos - 1)), (Some(a), Some(b)) if a == b);
 -        at_start(
@@ -94,7 +93,7 @@ index 803ed76..0b9727a 100644
              if doubled {
                  self.indel_double
              } else {
-@@ -417,13 +463,13 @@ impl CostModel {
+@@ -545,13 +591,13 @@ impl CostModel {
          } else {
              self.indel
          };
@@ -102,7 +101,7 @@ index 803ed76..0b9727a 100644
 +        self.at_start(base, qpos)
      }
  
-     /// Cost of swapping two adjacent bytes, the first at `qpos` in the query.
+     /// Cost of swapping two adjacent symbols, the first at `qpos` in the query.
      #[inline]
      pub fn transpose_cost(&self, qpos: usize) -> Cost {
 -        at_start(self.transpose, qpos)
