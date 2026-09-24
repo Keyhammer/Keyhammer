@@ -24,10 +24,10 @@ fn run(trie: &Trie, q: &[u8], cfg: &SearchConfig) -> Vec<(u32, u16)> {
 /// Every combination of the subtree bound and the ranking mode.
 fn modes() -> [(bool, Ranking); 4] {
     [
-        (false, Ranking::Edits),
-        (true, Ranking::Edits),
-        (false, Ranking::Cost),
-        (true, Ranking::Cost),
+        (false, Ranking::Coarse),
+        (true, Ranking::Coarse),
+        (false, Ranking::Exact),
+        (true, Ranking::Exact),
     ]
 }
 
@@ -310,9 +310,9 @@ fn a_searcher_can_be_reused_across_queries() {
 }
 
 #[test]
-fn equal_edit_counts_are_ordered_by_weight() {
+fn equal_whole_units_are_ordered_by_weight() {
     // "hrllo": 'r' for 'e' is a neighbouring key (8), 'r' for 'a' is not (16).
-    // Both terms are one edit away.
+    // Both costs round up to one unit of 16.
     let trie = Trie::build(&[("hello", 100), ("hallo", 200)]).unwrap();
     let cm = CostModel::qwerty();
     assert_eq!(cm.sub_cost(b'r', b'e', 1), 8);
@@ -324,26 +324,52 @@ fn equal_edit_counts_are_ordered_by_weight() {
         .find(|&id| trie.term(id) == "hallo")
         .unwrap();
     for tsb in [false, true] {
-        let by_edits = SearchConfig {
+        let coarse = SearchConfig {
             tsb,
-            ranking: Ranking::Edits,
+            ranking: Ranking::Coarse,
             ..SearchConfig::default()
         };
-        // Same edit count: the heavier "hallo" first, costs stay exact.
+        // Same number of units: the heavier "hallo" first, costs stay exact.
         assert_eq!(
-            run(&trie, b"hrllo", &by_edits),
+            run(&trie, b"hrllo", &coarse),
             vec![(hallo, 16), (hello, 8)],
             "tsb={tsb}"
         );
-        let by_cost = SearchConfig {
+        let exact = SearchConfig {
             tsb,
-            ranking: Ranking::Cost,
+            ranking: Ranking::Exact,
             ..SearchConfig::default()
         };
         assert_eq!(
-            run(&trie, b"hrllo", &by_cost),
+            run(&trie, b"hrllo", &exact),
             vec![(hello, 8), (hallo, 16)],
             "tsb={tsb}"
+        );
+    }
+}
+
+#[test]
+fn first_byte_edits_count_as_two_units() {
+    // This pins the current documented behaviour; it does not claim that it is
+    // ideal. Both terms are one edit away from "bat", but the edit on the
+    // first byte of "cat" costs 16 x 1.5 = 24, which rounds up to two units,
+    // so the lighter "bad" (16, one unit) ranks first under both rankings.
+    let trie = Trie::build(&[("cat", 200), ("bad", 100)]).unwrap();
+    let cm = CostModel::qwerty();
+    assert_eq!(cm.sub_cost(b'b', b'c', 0), 24);
+    assert_eq!(cm.sub_cost(b't', b'd', 2), 16);
+    let id = |t: &str| (0..trie.len() as u32).find(|&i| trie.term(i) == t).unwrap();
+    let (cat, bad) = (id("cat"), id("bad"));
+    for (tsb, ranking) in modes() {
+        let cfg = SearchConfig {
+            tsb,
+            ranking,
+            ..SearchConfig::default()
+        };
+        assert_eq!(
+            run(&trie, b"bat", &cfg),
+            vec![(bad, 16), (cat, 24)],
+            "tsb={tsb} ranking={ranking:?}"
         );
     }
 }

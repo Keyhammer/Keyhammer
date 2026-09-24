@@ -15,11 +15,14 @@ pub type Cost = u16;
 /// transposition) cost a fraction of it, edits on the first byte cost more.
 pub const COST_UNIT: Cost = 16;
 
-/// Number of edits a weighted `cost` amounts to: `cost / COST_UNIT`, rounded
-/// up. Any non-zero cost counts as at least one edit; costs of 1 to 16 are one
-/// edit, 17 to 32 two edits, and so on.
+/// The weighted `cost` rounded up to whole units of [`COST_UNIT`]: 0 stays 0,
+/// 1 to 16 is one unit, 17 to 32 two units, and so on.
+///
+/// This is not a count of edits. An ordinary edit on the first query byte
+/// costs 24 (16 x 1.5), so it counts as two units, and two cheap edits
+/// (8 + 8) count as one.
 #[inline]
-pub fn edit_count(cost: Cost) -> Cost {
+pub fn whole_units(cost: Cost) -> Cost {
     cost.div_ceil(COST_UNIT)
 }
 
