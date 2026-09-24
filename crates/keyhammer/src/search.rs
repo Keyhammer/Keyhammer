@@ -66,7 +66,7 @@ impl Ranking {
 /// Search parameters.
 ///
 /// Build it with `..SearchConfig::default()` so that new fields keep their
-/// defaults: `k = 10`, `budget = 32` (two ordinary edits' worth of cost), `tsb = false`,
+/// defaults: `k = 10`, `budget = 32` (two ordinary edits' worth of cost), `tsb = true`,
 /// `max_nodes = 100_000`, `ranking = Ranking::Coarse`.
 #[derive(Clone, Debug)]
 pub struct SearchConfig {
@@ -74,7 +74,14 @@ pub struct SearchConfig {
     pub k: usize,
     /// Largest accepted edit cost (fixed point, 16 = one edit).
     pub budget: Cost,
-    /// Use the subtree-signature lower bound.
+    /// Use the subtree-signature lower bound (on by default).
+    ///
+    /// It never changes the results of a search that finishes within `max_nodes`, only how much work is done; if the node limit stops a search, both modes return a correct prefix of the same ranked list, but its length can differ. In
+    /// `docs/benchmarks/tsb-default.md` it expanded about a third fewer trie
+    /// nodes and lowered p95 latency by about a fifth (one machine, one
+    /// corpus). The per-node data it reads is built by [`Trie::build`]
+    /// whatever this flag says, so turning it off saves no memory; set
+    /// `tsb: false` to compare or to measure the plain bound.
     pub tsb: bool,
     /// Hard limit on expanded trie nodes.
     pub max_nodes: usize,
@@ -84,8 +91,9 @@ pub struct SearchConfig {
 
 impl SearchConfig {
     /// An opt-in configuration that trades speed for recall: the default
-    /// settings with `budget = 48` (three ordinary edits' worth of cost) and the
-    /// subtree bound on (`tsb = true`, which does not change the results).
+    /// settings with `budget = 48` (three ordinary edits' worth of cost). It
+    /// sets the subtree bound on explicitly (`tsb = true`, which does not change
+    /// the results and is also the default).
     ///
     /// On the benchmark in `docs/benchmarks/recall-preset.md` (300 Birkbeck
     /// typo pairs, one machine, median of three runs) it found the right word more often
@@ -117,7 +125,7 @@ impl Default for SearchConfig {
         Self {
             k: 10,
             budget: 32,
-            tsb: false,
+            tsb: true,
             max_nodes: 100_000,
             ranking: Ranking::Coarse,
         }

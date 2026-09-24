@@ -70,14 +70,14 @@ assert_eq!(best.cost, 16);
 ```
 
 Costs are fixed point: 16 is one ordinary edit, so the default budget of 32
-allows about two edits. Set `tsb: true` in `SearchConfig` to enable the subtree
-signature bound; it prunes work without changing the results (see
+allows about two edits. The subtree signature bound is on by default (`tsb: true`;
+set `tsb: false` to turn it off); it prunes work without changing the results (see
 [How it works](/docs/how-it-works)).
 
 For higher recall at a latency cost, `SearchConfig::high_recall()` is the default
 with a budget of 48 and the subtree bound on. In the repository's benchmark
 (300 Birkbeck typo pairs, one machine, median of three runs) it found the right
-word more often. Compared with the default budget with `tsb: true`, it expanded
+word more often. Compared with the default budget (bound on in both), it expanded
 about 4.6-5.2 times the nodes and had about 5.5-7.3 times the p95 latency (about
 5.2-7.5 times with the bound off); measure it on your own dictionary. The largest accepted budget is 64.
 

@@ -233,6 +233,36 @@ fn tsb_and_plain_bound_return_identical_hits_and_tsb_never_pushes_more_in_total(
     );
 }
 
+/// `SearchConfig::default()` turns the subtree bound on (issue #49); the
+/// results are identical with it off, and turning it off is still possible.
+#[test]
+fn the_default_enables_the_bound_and_results_do_not_depend_on_it() {
+    assert!(SearchConfig::default().tsb);
+    assert!(SearchConfig::high_recall().tsb);
+    let mut rng = Rng::new(49);
+    let strings: Vec<String> = (0..1000)
+        .map(|_| String::from_utf8(random_word(&mut rng, 26)).unwrap())
+        .collect();
+    let items: Vec<(&str, u16)> = strings
+        .iter()
+        .map(|s| (s.as_str(), rng.below(65_536) as u16))
+        .collect();
+    let trie = Trie::build(&items).unwrap();
+    let cm = CostModel::qwerty();
+    let mut s = Searcher::new();
+    for _ in 0..100 {
+        let q = random_word(&mut rng, 26);
+        let default = s.search(&trie, &cm, &q, &SearchConfig::default()).unwrap();
+        let off = SearchConfig {
+            tsb: false,
+            ..SearchConfig::default()
+        };
+        let plain = s.search(&trie, &cm, &q, &off).unwrap();
+        assert_eq!(default.hits, plain.hits);
+        assert!(default.stats.nodes_expanded <= plain.stats.nodes_expanded);
+    }
+}
+
 #[test]
 fn both_rankings_return_the_same_candidate_set() {
     let cm = CostModel::qwerty();
