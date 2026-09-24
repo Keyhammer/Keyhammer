@@ -38,8 +38,7 @@ function rewriteTarget(target, srcPath) {
 
 // Limits of this regex-based rewriting: it also touches text inside code
 // fences, does not handle images nested in links, and does not handle
-// parentheses inside link targets. The synced sources link to each other and to
-// repository files with plain relative links, which it rewrites.
+// parentheses inside link targets. Relative links in the synced sources, if any, are rewritten.
 function rewriteLinks(text, srcPath) {
   // Inline links and images: [text](target "title") and ![alt](target).
   const inline = text.replace(

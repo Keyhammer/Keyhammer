@@ -122,7 +122,7 @@ function parseArgs(argv) {
 // --- data -----------------------------------------------------------------------
 
 function readPairs(path) {
-  if (!existsSync(path)) throw new Error(`cannot read ${path}; see the data steps in the README of bench/js-competitors`);
+  if (!existsSync(path)) throw new Error(`cannot read ${path}; see the data steps under "How to reproduce" in docs/benchmarks/competitors-js.md`);
   const out = [];
   for (const l of readFileSync(path, 'utf8').split('\n')) {
     if (l.trim() === '') continue;
@@ -280,14 +280,14 @@ const FACTORIES = {
     const uf = new uFuzzy({ intraMode: 1 });
     // infoThresh is raised so that the library always ranks its matches: with the default (1000)
     // it returns unranked matches, in dictionary order, whenever there are more than 1000.
-    const ranked = (q) => {
+    const ranked = (q, n) => {
       const [idxs, info, order] = uf.search(dict, q, 0, 1e9);
       if (!idxs) return [];
-      return order ? order.map((o) => dict[info.idx[o]]) : idxs.map((i) => dict[i]);
+      return order ? order.slice(0, n).map((o) => dict[info.idx[o]]) : idxs.slice(0, n).map((i) => dict[i]);
     };
     return {
-      search: (q) => ranked(q).slice(0, TOP),
-      cand: (q) => ranked(q).slice(0, RERANK_CAP),
+      search: (q) => ranked(q, TOP),
+      cand: (q) => ranked(q, RERANK_CAP),
     };
   },
   fuzzysort: async (words, ctx, threshold = 0) => {
@@ -487,6 +487,8 @@ function timeOnce(search, queries, a) {
       const res = search(q);
       lat.push((performance.now() - t) * 1e3);
       if (res === undefined) throw new Error('search returned nothing');
+      // A slow engine stops here, so it is timed on the first N queries of the set only, not on the
+      // whole set the other engines run; its percentiles compare a different query subset.
       if (lat.length >= 100 && performance.now() - wall > a.maxRunSeconds * 1e3) {
         stop = true;
         break;
