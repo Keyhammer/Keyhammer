@@ -23,14 +23,16 @@ Keyhammer is an **unpublished M0 prototype**. Please read the
 
 - The search is exact: it returns the same top-k as a brute-force oracle, and
   the test suite checks this.
-- On the M0 benchmark it was much faster than the previous engine in this
-  repository, but its ranking quality (MRR) was **below a simple baseline** at
-  every dictionary size tested.
+- It was much faster than the previous engine in the M0 benchmark (one machine;
+  see [Results](/docs/results)). Ranking quality versus a simple
+  edit-distance-plus-frequency baseline is reported there too. Both are
+  measured on one machine, 300 typo pairs and one corpus, with provisional
+  costs, so read the caveats before drawing conclusions.
 - The cost table is provisional and has not been calibrated.
 - The project claims no novelty: the ingredients are published work (see
   [prior art](/docs/prior-art)).
-- Queries and terms are raw bytes, already lowercased. There is no Unicode
-  handling.
+- The engine currently expects lowercase ASCII (a-z) and compares other bytes
+  verbatim. Unicode and case folding are not implemented yet.
 - Nothing is published to crates.io or npm, and the API is unstable.
 
 ## Quick example

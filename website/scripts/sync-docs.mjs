@@ -34,6 +34,10 @@ function rewriteTarget(target, srcPath) {
   return route ? route + suffix : BLOB + repoPath + suffix;
 }
 
+// Limits of this regex-based rewriting: it also touches text inside code
+// fences, does not handle images nested in links, and does not handle
+// parentheses inside link targets. The four current sources contain no
+// relative links, so today it only has to leave them alone.
 function rewriteLinks(text, srcPath) {
   // Inline links and images: [text](target "title") and ![alt](target).
   const inline = text.replace(
@@ -63,6 +67,9 @@ for (const name of readdirSync(contentDir).filter((f) => f.endsWith('.md'))) {
 
 for (const { src, slug, title, position } of synced) {
   const body = readFileSync(join(repoDir, ...src.split('/')), 'utf8').replace(/^﻿/, '');
+  if (body.startsWith('---')) {
+    throw new Error(`sync-docs: ${src} already starts with front matter; adapt the script before syncing it`);
+  }
   const head = frontMatter({
     title,
     sidebar_position: position,

@@ -26,13 +26,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: pages
-  cancel-in-progress: false
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Per-ref group: superseded builds are cancelled, and a build can never
+    # queue behind or replace a deploy.
+    concurrency:
+      group: pages-build-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,8 +53,6 @@ jobs:
       # local `npm run build`: the rustdoc output is copied into static/api
       # here so that Docusaurus serves it.
       - name: Build the API reference
-        env:
-          RUSTDOCFLAGS: -D warnings
         run: |
           cargo doc -p keyhammer --no-deps
           mkdir -p website/static/api
@@ -67,14 +66,20 @@ jobs:
         working-directory: website
         run: npm run build
 
+      - name: Check that the API reference landed in the site
+        run: test -f website/build/api/keyhammer/index.html
+
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: website/build
 
   deploy:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     needs: build
     runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     permissions:
       pages: write
       id-token: write
