@@ -6,7 +6,7 @@
 //! ## Quick start
 //!
 //! ```rust
-//! use keyhammer::FuzzyIndex;
+//! use keyhammer_legacy::FuzzyIndex;
 //!
 //! let terms = vec!["javascript", "typescript", "python", "rust"];
 //! let index = FuzzyIndex::build(&terms, 2).unwrap();

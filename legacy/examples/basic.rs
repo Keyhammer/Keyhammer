@@ -1,4 +1,4 @@
-use keyhammer::FuzzyIndex;
+use keyhammer_legacy::FuzzyIndex;
 
 fn main() {
     let terms = vec![

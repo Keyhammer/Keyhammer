@@ -8,7 +8,7 @@
 /// # Example
 ///
 /// ```
-/// use keyhammer::{TypoEncoding, KeyboardLayout};
+/// use keyhammer_legacy::{TypoEncoding, KeyboardLayout};
 ///
 /// let enc = TypoEncoding::from_layout(KeyboardLayout::Qwerty);
 /// let a = enc.encode_str(b"javascript");

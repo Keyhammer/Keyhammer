@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use std::time::Duration;
-use keyhammer::FuzzyIndex;
+use keyhammer_legacy::FuzzyIndex;
 
 fn fast_config() -> Criterion {
     Criterion::default()

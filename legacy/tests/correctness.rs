@@ -1,4 +1,4 @@
-use keyhammer::FuzzyIndex;
+use keyhammer_legacy::FuzzyIndex;
 
 #[test]
 fn finds_exact_match() {

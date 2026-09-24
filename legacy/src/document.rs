@@ -5,7 +5,7 @@
 /// # Example
 ///
 /// ```
-/// use keyhammer::DocumentIndex;
+/// use keyhammer_legacy::DocumentIndex;
 ///
 /// let docs = vec![
 ///     vec![("name", "JavaScript"), ("category", "language")],

@@ -1,0 +1,21 @@
+[package]
+name = "keyhammer-legacy"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Legacy Keyhammer engine, kept only as a benchmark reference"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/Keyhammer/Keyhammer"
+publish = false
+
+[lib]
+name = "keyhammer_legacy"
+
+[dependencies]
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "search"
+harness = false

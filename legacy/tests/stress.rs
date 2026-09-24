@@ -1,7 +1,7 @@
 /// Stress tests — push keyhammer to its limits.
 /// From edge cases to adversarial inputs to scale tests.
 
-use keyhammer::FuzzyIndex;
+use keyhammer_legacy::FuzzyIndex;
 
 // ─── Edge cases ────────────────────────────────────────────────────────────
 

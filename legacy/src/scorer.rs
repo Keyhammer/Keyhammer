@@ -13,7 +13,7 @@ pub struct TypoScore {
 /// # Example
 ///
 /// ```
-/// use keyhammer::{FuzzyIndex, KeyboardLayout};
+/// use keyhammer_legacy::{FuzzyIndex, KeyboardLayout};
 ///
 /// // French keyboard
 /// let index = FuzzyIndex::build_with_layout(&["bonjour"], 2, KeyboardLayout::Azerty).unwrap();
