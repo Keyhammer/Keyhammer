@@ -27,4 +27,9 @@ would require a separate agreement, for example a contributor license agreement 
   from the strict lints.
 - Fuzz targets live in `crates/keyhammer/fuzz` (`cargo +nightly fuzz run <target>`);
   see `docs/fuzzing.md`.
+- Other CI gates: `cargo deny check` (config in `deny.toml`; only licences
+  compatible with AGPL-3.0-or-later), and a size gate that fails when the
+  gzipped `.wasm` exceeds 20 KB (`WASM_GZIP_BUDGET` in `.github/workflows/ci.yml`;
+  raise it only in a pull request that explains why). A weekly workflow runs
+  `cargo miri test -p keyhammer`.
 - The core crate forbids `unsafe` and must stay free of runtime dependencies.

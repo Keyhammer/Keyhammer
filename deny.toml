@@ -1,0 +1,38 @@
+# cargo-deny configuration (https://embarkstudios.github.io/cargo-deny/).
+# Run: cargo deny check
+#
+# Scope: the main workspace (Cargo.lock at the repository root). The two
+# manifests excluded from it, crates/node and bench/competitors, have their own
+# lockfiles and are not checked here; bench/competitors pulls third-party
+# search crates only for comparison and is never shipped.
+
+[graph]
+all-features = true
+
+[licenses]
+# Keyhammer is AGPL-3.0-or-later. Only licences that can be combined into an
+# AGPL-3.0-or-later work are allowed.
+allow = [
+    "AGPL-3.0-or-later",
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+# Today only the workspace crates themselves are in the graph; the permissive
+# licences are kept so that future dependencies with them do not need a change.
+unused-allowed-license = "allow"
+
+[advisories]
+yanked = "deny"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

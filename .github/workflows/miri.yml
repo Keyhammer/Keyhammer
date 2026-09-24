@@ -1,0 +1,30 @@
+name: miri
+
+# Runs the core crate's tests under Miri to catch undefined behaviour. The core
+# forbids `unsafe`, so this is a cheap safety net for its dependencies and for
+# future changes; it is slow, so it runs weekly rather than on every push.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+  # Also runs when this file changes, so an edit is checked before it merges.
+  pull_request:
+    paths: [".github/workflows/miri.yml"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  miri:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - run: cargo miri setup
+      - run: cargo miri test -p keyhammer
