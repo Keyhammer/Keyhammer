@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Robson Trasel
+
 #![allow(dead_code)]
 /// Fiat-Naor function inversion (Section 4.3 of arXiv:2604.01307).
 ///

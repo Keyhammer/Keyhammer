@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Robson Trasel
+
 use keyhammer_legacy::FuzzyIndex;
 
 fn main() {

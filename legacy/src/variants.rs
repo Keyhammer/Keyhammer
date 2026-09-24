@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Robson Trasel
+
 /// Edit operation variants for covering Damerau-Levenshtein with Hamming search.
 
 /// All single-character deletions of `word`. "abc" → ["bc", "ac", "ab"].

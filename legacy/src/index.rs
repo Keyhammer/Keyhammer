@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Robson Trasel
+
 /// FuzzyIndex — maximum performance fuzzy search.
 ///
 /// Uses fingerprint-based matching instead of pre-generated deletion variants.

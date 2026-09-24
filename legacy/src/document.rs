@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Robson Trasel
+
 /// Multi-field document support.
 ///
 /// Allows indexing objects with multiple searchable fields, each with a weight.

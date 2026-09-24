@@ -1,5 +1,7 @@
 # keyhammer
 
+> **Status:** under active rewrite (Keyhammer 2). The numbers below describe the legacy engine.
+
 Fuzzy string search that knows how humans make typos. 100x faster than FuseJS.
 
 ## The problem
@@ -141,4 +143,5 @@ Robson Trasel ([@RobsonTrasel](https://github.com/RobsonTrasel))
 
 ## License
 
-MIT
+AGPL-3.0-or-later. See [LICENSE](LICENSE). Earlier commits, published before the
+relicense commit ("chore: relicense to AGPL-3.0-or-later"), were released under MIT.

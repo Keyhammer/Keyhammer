@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Robson Trasel
+
 /// Lazy CGL tree — demand-driven, thread-safe construction.
 ///
 /// Child nodes store their input data and construct themselves on first access.

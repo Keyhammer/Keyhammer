@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Robson Trasel
+
 /// Character substitution at a specific position.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]

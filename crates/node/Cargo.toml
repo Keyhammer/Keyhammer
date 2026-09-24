@@ -1,6 +1,8 @@
 [package]
 name = "keyhammer-node"
 version = "0.1.0"
+license = "AGPL-3.0-or-later"
+publish = false
 edition = "2024"
 
 [lib]

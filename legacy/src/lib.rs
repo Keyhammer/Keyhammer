@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Robson Trasel
+
 //! # keyhammer
 //!
 //! Fuzzy string search that knows how humans make typos.

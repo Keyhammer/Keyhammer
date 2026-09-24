@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Robson Trasel
+
 /// Character frequency fingerprint.
 ///
 /// 96-byte array covering printable ASCII (32-126). Used as a cheap pre-filter
