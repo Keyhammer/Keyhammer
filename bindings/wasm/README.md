@@ -17,6 +17,8 @@ any time.
 | `kh_search` | `(ptr, len, k: u32, budget: u32, ranking: u32) -> u32` | Searches for the UTF-8 query at `(ptr, len)`. `ranking`: 0 = `Coarse`, 1 = `Exact`. Returns the number of hits, or `u32::MAX` on error (no index, query longer than 128 bytes, budget too large, unknown ranking, invalid UTF-8). |
 | `kh_results_ptr` / `kh_results_len` | `() -> *const u8` / `() -> u32` | The results text of the last search (format below), valid until the next `kh_build` or `kh_search`. |
 
+Searches use `SearchConfig::default()`, subtree bound on.
+
 **Dictionary text** (`kh_build`): one term per line, optionally followed by
 `TAB weight` (0 to 65535, default 0). ASCII letters are lower-cased. Lines that
 are empty, longer than 65535 bytes or whose weight is not a valid number are

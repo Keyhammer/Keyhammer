@@ -403,11 +403,11 @@ fn first_byte_units_depend_on_the_kind_of_edit() {
 }
 
 #[test]
-fn the_high_recall_preset_is_the_default_with_budget_48_and_the_bound_on() {
+fn the_high_recall_preset_is_the_default_with_budget_48() {
     let d = SearchConfig::default();
     let p = SearchConfig::high_recall();
     assert_eq!(d.budget, 32, "the default budget must stay 32");
-    assert!(!d.tsb, "the default keeps the subtree bound off");
+    assert!(d.tsb, "the default has the subtree bound on (issue #49)");
     assert_eq!(p.budget, 48);
     assert!(p.tsb);
     assert_eq!((p.k, p.max_nodes, p.ranking), (d.k, d.max_nodes, d.ranking));

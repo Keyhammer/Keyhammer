@@ -81,9 +81,9 @@ assert_eq!(best.cost, 16);
 The same example runs as a doc test in `crates/keyhammer/src/lib.rs`.
 
 The default budget is 32 (about two edits). For higher recall at a latency cost
-use `SearchConfig::high_recall()` (budget 48, subtree bound on). On the 300
+use `SearchConfig::high_recall()` (budget 48; the subtree bound is on, as in the default). On the 300
 Birkbeck typo pairs it found the right word more often. Compared with the
-default budget with `tsb: true`, it expanded about 4.6-5.2x the nodes and had
+default budget (bound on in both), it expanded about 4.6-5.2x the nodes and had
 about 5.5-7.3x the p95 latency (about 5.2-7.5x with the bound off); one corpus,
 one machine, median of three runs, see
 [`docs/benchmarks/recall-preset.md`](docs/benchmarks/recall-preset.md). Budgets
