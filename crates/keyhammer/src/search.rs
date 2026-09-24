@@ -599,6 +599,7 @@ impl Searcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cost::Layout;
     use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
@@ -836,10 +837,13 @@ mod tests {
     fn check_mode(tsb: bool) -> Coverage {
         // In the last alphabet '!' and '"' share the classes of 'a' and 'b'.
         let alphabets: [&[u8]; 4] = [b"aqw", b"asdfqwer", b"abcdefghijklmnopqrstuvwxyz", b"ab!\""];
-        let cm = CostModel::qwerty();
         let mut cov = Coverage::default();
         for (a, alpha) in alphabets.iter().enumerate() {
             for d in 0..150 {
+                // Every layout in turn: the bound uses the model's minimum
+                // costs, which must hold for any of them.
+                let layouts = Layout::ALL;
+                let cm = CostModel::for_layout(layouts[d as usize % layouts.len()]);
                 let mut rng = Rng::new((a as u64 + 1) * 1000 + d);
                 let dict = random_dictionary(&mut rng, alpha);
                 let items: Vec<(&str, u16)> = dict.iter().map(|(s, w)| (s.as_str(), *w)).collect();

@@ -9,7 +9,7 @@
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
 use crate::support::{oracle_cost, oracle_topk};
-use keyhammer::cost::CostModel;
+use keyhammer::cost::{CostModel, Layout};
 use keyhammer::search::{Ranking, SearchConfig, Searcher};
 use keyhammer::trie::Trie;
 
@@ -29,6 +29,11 @@ impl Cursor<'_> {
     fn u16(&mut self) -> u16 {
         u16::from_le_bytes([self.u8(), self.u8()])
     }
+}
+
+/// The layout picked by the top bits of the flags byte.
+fn layout(b: u8) -> Layout {
+    Layout::ALL[usize::from(b >> 5) % Layout::ALL.len()]
 }
 
 fn ranking(b: u8) -> Ranking {
@@ -98,7 +103,7 @@ pub fn never_panics(data: &[u8]) {
         max_nodes,
         ranking: ranking(flags),
     };
-    let cm = CostModel::qwerty();
+    let cm = CostModel::for_layout(layout(flags));
     if let Ok(out) = Searcher::new().search(&trie, &cm, q, &cfg) {
         assert!(out.hits.len() <= k);
         assert!(out.hits.iter().all(|h| h.cost <= budget));
@@ -121,7 +126,7 @@ pub fn oracle_equality(data: &[u8]) {
     let Some(trie) = build(&terms) else {
         return;
     };
-    let cm = CostModel::qwerty();
+    let cm = CostModel::for_layout(layout(flags));
     let mut s = Searcher::new();
     for rk in [Ranking::Coarse, Ranking::Exact] {
         let want = oracle_topk(&trie, &cm, &q, budget, k, rk);
@@ -177,7 +182,7 @@ pub fn tsb_equivalence(data: &[u8]) {
     let Some(trie) = build(&terms) else {
         return;
     };
-    let cm = CostModel::qwerty();
+    let cm = CostModel::for_layout(layout(flags));
     let mut s = Searcher::new();
     let mut run = |tsb| {
         let cfg = SearchConfig {

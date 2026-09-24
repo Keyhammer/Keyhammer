@@ -5,7 +5,7 @@
 
 mod support;
 
-use keyhammer::cost::CostModel;
+use keyhammer::cost::{CostModel, Layout};
 use keyhammer::search::{Ranking, SearchConfig, Searcher};
 use keyhammer::trie::Trie;
 use support::{Rng, oracle_topk};
@@ -42,6 +42,17 @@ fn mutate(rng: &mut Rng, word: &[u8], alpha: u64, ops: usize) -> Vec<u8> {
 }
 
 fn check(seed: u64, alpha: u64, dict_size: usize, tsb: bool, ranking: Ranking) {
+    check_with(Layout::Qwerty, seed, alpha, dict_size, tsb, ranking);
+}
+
+fn check_with(
+    layout: Layout,
+    seed: u64,
+    alpha: u64,
+    dict_size: usize,
+    tsb: bool,
+    ranking: Ranking,
+) {
     let mut rng = Rng::new(seed);
     let words: Vec<Vec<u8>> = (0..dict_size)
         .map(|_| random_word(&mut rng, alpha))
@@ -65,7 +76,7 @@ fn check(seed: u64, alpha: u64, dict_size: usize, tsb: bool, ranking: Ranking) {
         .zip(weights.iter().copied())
         .collect();
     let trie = Trie::build(&items).unwrap();
-    let cm = CostModel::qwerty();
+    let cm = CostModel::for_layout(layout);
     let mut searcher = Searcher::new();
 
     for _ in 0..60 {
@@ -96,7 +107,8 @@ fn check(seed: u64, alpha: u64, dict_size: usize, tsb: bool, ranking: Ranking) {
             assert_eq!(
                 got,
                 want,
-                "seed={seed} alpha={alpha} q={:?} k={k} budget={budget} tsb={tsb} ranking={ranking:?}",
+                "layout={} seed={seed} alpha={alpha} q={:?} k={k} budget={budget} tsb={tsb} ranking={ranking:?}",
+                layout.name(),
                 String::from_utf8_lossy(&q)
             );
         }
@@ -355,6 +367,20 @@ fn the_high_recall_preset_matches_the_oracle() {
                         );
                     }
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn every_layout_matches_the_oracle_with_and_without_the_bound() {
+    // The layout changes which substitutions are cheap, never the minimum
+    // costs the bounds and the band width use; the search must stay exact.
+    for &layout in Layout::ALL {
+        for seed in 300..306 {
+            for tsb in [false, true] {
+                check_with(layout, seed, 26, 300, tsb, Ranking::Coarse);
+                check_with(layout, seed + 50, 8, 200, tsb, Ranking::Exact);
             }
         }
     }
