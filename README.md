@@ -27,7 +27,9 @@ Given a dictionary of terms with frequency weights, Keyhammer returns the top-k
 terms closest to a mistyped query. Edit costs depend on the keyboard: hitting a
 neighbouring key is cheaper than an arbitrary substitution. The core crate is
 `no_std` (it needs `alloc`), uses `forbid(unsafe_code)` and has zero
-dependencies. Queries and terms are lowercased bytes for now.
+dependencies. Terms and queries are compared per Unicode code point; the
+`text` module folds case and diacritics (Latin-1 and Latin Extended-A, see
+`docs/design/unicode.md`).
 
 ## How it works
 
@@ -153,7 +155,7 @@ legacy one), so its numbers are not comparable with earlier runs of that script.
 ## Roadmap
 
 - Improve ranking quality against the baseline.
-- Unicode support and more keyboard layouts.
+- Unicode folding beyond Latin-1 and Latin Extended-A, and in the bindings.
 - Index serialization.
 - More language bindings for the new engine (Node.js exists: `bindings/node`).
 

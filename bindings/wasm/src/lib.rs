@@ -18,8 +18,8 @@
 //! - [`kh_build`]: builds the index from UTF-8 text, one term per line with an
 //!   optional `TAB weight` (a `u16`, default 0). ASCII letters are lower-cased.
 //!   Lines that are empty, longer than 65535 bytes, or whose weight is not a
-//!   `u16` are skipped. Other bytes are kept verbatim: the engine currently
-//!   expects lowercase ASCII `a-z` and compares any other byte as is. Returns
+//!   `u16` are skipped. Other characters are kept as they are and compared
+//!   per code point (no case or diacritic folding beyond ASCII). Returns
 //!   the number of distinct terms loaded (duplicates keep the highest
 //!   weight), or 0 on failure, in which case there is no index any more.
 //! - [`kh_search`]: runs a search; returns the number of hits, or `u32::MAX`

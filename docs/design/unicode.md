@@ -29,7 +29,7 @@ same pull request unless it is listed under "Not done".
    Colemak. QWERTY is unchanged. Every other character gets the default costs.
 6. Match ranges: only the mapping utilities (`text::SourceMap`, code point to UTF-8 and
    UTF-16 offsets). Highlighting itself is issue #32.
-7. Bindings: unchanged in this change (they still build and pass). What each needs is in
+7. Bindings: no code change (only their docs); they still build and pass. What each needs is in
    section 8.
 
 ## 2. The `text` module
@@ -136,7 +136,8 @@ covers it, extended over input characters that produced nothing (a dropped combi
 right after the range belongs to the letter before it). `text::utf8_offset` and
 `text::utf16_offset` turn a code-point index of a `&str` into a byte or a UTF-16 unit
 offset. This is what #32 needs to report ranges in the caller's original string in all
-three units; #32 itself (the traceback) is not part of this change.
+three units (`text::utf8_range` and `text::utf16_range` do it for a range);
+#32 itself (the traceback) is not part of this change.
 
 ## 3. The engine alphabet
 
@@ -174,7 +175,9 @@ normaliser, the query is normalised into another reusable buffer first.
   most U+00FF (every ASCII and Latin-1 dictionary, so every dictionary normalised by the
   default normaliser except those with other scripts) and in a `Vec<u32>` otherwise. So
   the memory of an ASCII trie is unchanged; a trie with other scripts pays three bytes
-  more per node. The search reads the label through one predictable branch.
+  more per node. The search reads the label through one predictable branch. `Trie::build`
+  walks a dictionary whose terms are all ASCII as bytes, as before, and any other one as a
+  buffer of code points.
 - `len_min`, `len_max` and depths count symbols. For ASCII that is bytes, as before.
 - `Trie::label(v)` returns a `char` instead of a `u8` (breaking, see section 6).
 - Term order is byte order of UTF-8, which equals code-point order, so term ids,
@@ -224,10 +227,10 @@ non-Latin text is not measured; it is a bound, not a result.
 
 ## 5. The cost model and the layouts
 
-- `sub_cost`, `ins_cost` and `del_cost` become generic over `S: Copy + Into<u32> +
-  PartialEq`, so `cm.sub_cost(b'a', b's', 1)` still compiles and returns what it did, and
-  `cm.sub_cost('ç', 'l', 1)` works. A `u8` argument is read as the code point U+0000 to
-  U+00FF.
+- `sub_cost` becomes generic over `S: Into<u32>`, `ins_cost` and `del_cost` over
+  `S: PartialEq`, so `cm.sub_cost(b'a', b's', 1)` still compiles and returns what it did,
+  and `cm.sub_cost('ç', 'l', 1)` works. A `u8` argument is read as the code point U+0000
+  to U+00FF.
 - Neighbours: the 26x26 bit table for `a`-`z` stays (it is the fast path and it is
   identical to before for every layout). Pairs with a key outside `a`-`z` are kept in a
   short list per layout, computed at compile time from the same geometry. `CostModel::qwerty()`
@@ -285,7 +288,7 @@ The results are in `docs/benchmarks/unicode.md`.
 
 ## 8. Bindings
 
-None is changed here; all still build and their tests pass.
+No binding code is changed here (their docs are updated); all still build and their tests pass.
 
 - **WebAssembly and Node** (Node is JavaScript over the wasm build): lower-case ASCII and
   pass other text through. Non-ASCII text is now compared per code point instead of per
@@ -312,6 +315,18 @@ asserting today's behaviour), so it is left to the follow-up issue.
   and non-Latin letters, including colliding classes), with and without normalisation
   applied to both the oracle's input and the engine's.
 - ASCII regression: exact trie shape and `Stats` pinned for fixed dictionaries and queries.
+
+As run: the unit tests of `search.rs` check the bound on four non-ASCII alphabets
+(`aeéèçß`, `aàĆc` with colliding classes, `жзaЖ😀` with wide labels, `çlp.;` with the ABNT2
+neighbours), 43 200 cases per mode as for ASCII: 1 387 728 nodes, 218 100 of them with a
+within-budget term below, and 391 968 terminals per mode. Fourteen mutations of the new code
+(a case or base table entry, keeping combining marks, case before diacritics, `below_mask` from
+the low byte of wide labels, narrow labels up to U+07FF, one symbol for every invalid byte,
+ignoring the layout pairs outside `a`-`z`, source ranges not extended, UTF-16 offsets in bytes,
+`search_text` not normalising, non-ASCII classes on the letter classes, cross-row layout pairs
+dropped, ligatures not case folded) each make at least one test fail; the class mutation, which
+only weakens the bound and is admissible, is caught only by the example in the `symbol_class`
+docs. Measurements: `docs/benchmarks/unicode.md`.
 - Mutation testing of the new tests (a table entry changed, the class function changed,
   decoding changed): each must make a test fail.
 

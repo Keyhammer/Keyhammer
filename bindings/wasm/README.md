@@ -73,9 +73,10 @@ in.
 
 ## Limits
 
-- The engine expects lowercase ASCII `a-z`: ASCII letters are lower-cased and
-  any other byte is compared verbatim. Unicode and case folding are not
-  implemented.
+- ASCII letters are lower-cased; any other character is compared as it is,
+  one code point per symbol (the core's alphabet since issue #19). The core's
+  case and diacritic folding (`keyhammer::text`) is not used by this binding
+  yet, so `É` and `é` differ and `é` against `e` costs a substitution.
 - The module holds a single index; `kh_build` replaces it.
 - The costs are provisional and uncalibrated.
 - `unsafe` is used only at the boundary (raw pointers from JavaScript), with a

@@ -24,10 +24,10 @@
 //! # Text handling
 //!
 //! Terms and queries are UTF-8 byte ranges given as `(pointer, length)`,
-//! never NUL-terminated. Invalid UTF-8 is rejected. The engine currently
-//! expects lowercase ASCII `a-z` (other bytes are compared verbatim), so this
-//! layer lower-cases ASCII letters of terms and queries, like the WebAssembly
-//! build; hits therefore return the lower-cased term.
+//! never NUL-terminated. Invalid UTF-8 is rejected. The engine compares code
+//! points as they are; this layer lower-cases ASCII letters of terms and
+//! queries, like the WebAssembly build, and does not use the core's case and
+//! diacritic folding yet; hits therefore return the lower-cased term.
 //!
 //! # Threads
 //!

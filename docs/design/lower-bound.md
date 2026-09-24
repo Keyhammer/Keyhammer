@@ -196,6 +196,14 @@ most the exact one, so saturation can only lower `LB(v)`, never raise it.
 
 ## 3. The subtree-signature terms
 
+**Symbols (issue #19).** The search alphabet is now Unicode scalar values: in this note
+"byte" reads "symbol" (a code point of the term or the query, or `0x110000 + b` for a byte
+`b` of the query that is not valid UTF-8), and `class` is `cost::symbol_class`, which is
+`1 << (s & 63)` for ASCII, as below, and one of the 38 classes that `a`-`z` never use for
+every other symbol. Nothing below depends on more than "equal symbols have equal classes"
+and on depths and query positions counting the same units, so every argument carries over
+word for word; see `docs/design/unicode.md`, section 4.
+
 `trie.rs` stores for each node `v`:
 
 - `len_min(v)` and `len_max(v)`: the shortest and longest term length at or

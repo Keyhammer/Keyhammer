@@ -51,8 +51,9 @@ Terms and queries with lone UTF-16 surrogates are rejected (`TypeError`), and a
 term must not start or end with white space (`RangeError`), so nothing is
 changed silently.
 
-Those of the WebAssembly build (`bindings/wasm/README.md`): lowercase ASCII
-`a-z` only (other bytes are compared verbatim, no Unicode folding), provisional
+Those of the WebAssembly build (`bindings/wasm/README.md`): only ASCII letters
+are lower-cased (other characters are compared per code point, without the
+core's case and diacritic folding), provisional
 costs, no `tsb` option (the subtree bound is off), and a linear memory that
 does not shrink. Every `Index` has its own WebAssembly instance, so many small
 indexes cost more memory than one; searches are synchronous and run on the
