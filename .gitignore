@@ -8,3 +8,8 @@ crates/node/Cargo.lock
 crates/node/index.d.ts
 bench/data/
 bench/node_modules/
+/website/build/
+/website/.docusaurus/
+/website/node_modules/
+/website/docs/
+/website/static/api/
