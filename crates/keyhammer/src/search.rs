@@ -270,25 +270,60 @@ fn cap(v: Cost, budget: Cost) -> Cost {
     if v > budget { INF } else { v }
 }
 
-/// Index of the substitution (or match) in the array of [`moves`].
+/// Index of the substitution (or match) among the moves of [`each_move`].
 pub(crate) const SUB: usize = 0;
-/// Index of the transposition in the array of [`moves`].
+/// Index of the transposition among the moves of [`each_move`].
 pub(crate) const TRANSPOSE: usize = 1;
-/// Index of the insertion (a skipped term symbol) in the array of [`moves`].
+/// Index of the insertion (a skipped term symbol) among the moves of [`each_move`].
 pub(crate) const INSERT: usize = 2;
-/// Index of the deletion (an extra query symbol) in the array of [`moves`].
+/// Index of the deletion (an extra query symbol) among the moves of [`each_move`].
 pub(crate) const DELETE: usize = 3;
 
-/// The four candidate values of the weighted OSA cell `D[i][j]` (query prefix
-/// `q[..i]`, term prefix of length `j` ending in `ch`, whose previous symbol
-/// is `parent`, `None` when `j <= 1`), indexed by [`SUB`], [`TRANSPOSE`],
-/// [`INSERT`] and [`DELETE`]; `INF` for a move that is not available.
+/// Calls `f(move, value)` for each move into the weighted OSA cell `D[i][j]`
+/// that is available (query prefix `q[..i]`, term prefix of length `j` ending
+/// in `ch`, whose previous symbol is `parent`, `None` when `j <= 1`); `move`
+/// is [`SUB`], [`TRANSPOSE`], [`INSERT`] or [`DELETE`].
 ///
 /// `diag`, `up`, `left` and `skip2` are `D[i-1][j-1]`, `D[i][j-1]`,
-/// `D[i-1][j]` and `D[i-2][j-2]` (`INF` when absent). This is the only place
-/// where the cost model's step costs enter a DP cell: the rows of the search
-/// and the traceback of [`crate::highlight`] both use it, so highlighting
-/// cannot drift from the costs the search reports.
+/// `D[i-1][j]` and `D[i-2][j-2]` (`INF` when absent or over the budget). This
+/// is the only place where the cost model's step costs enter a DP cell: the
+/// rows of the search ([`cell_min`]) and the traceback of
+/// [`crate::highlight`] ([`moves`]) both go through it, so highlighting
+/// cannot drift from the costs the search reports. A visitor rather than an
+/// array keeps the search's hot loop as fast as a hand-written minimum.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+pub(crate) fn each_move(
+    cm: &CostModel,
+    q: &[u32],
+    i: usize,
+    ch: u32,
+    parent: Option<u32>,
+    diag: Cost,
+    up: Cost,
+    left: Cost,
+    skip2: Cost,
+    mut f: impl FnMut(usize, Cost),
+) {
+    if i >= 1 && diag < INF {
+        f(SUB, diag + cm.sub_cost(q[i - 1], ch, i - 1));
+    }
+    if up < INF {
+        f(INSERT, up + cm.ins_cost(ch, parent, i));
+    }
+    if i >= 1 && left < INF {
+        f(DELETE, left + cm.del_cost(q, i - 1));
+    }
+    if let Some(p) = parent {
+        if i >= 2 && q[i - 1] == p && q[i - 2] == ch && q[i - 1] != q[i - 2] && skip2 < INF {
+            f(TRANSPOSE, skip2 + cm.transpose_cost(i - 2));
+        }
+    }
+}
+
+/// The value of each move of [`each_move`], indexed by [`SUB`],
+/// [`TRANSPOSE`], [`INSERT`] and [`DELETE`]; `INF` for a move that is not
+/// available.
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 pub(crate) fn moves(
@@ -303,25 +338,31 @@ pub(crate) fn moves(
     skip2: Cost,
 ) -> [Cost; 4] {
     let mut out = [INF; 4];
-    if i >= 1 && diag < INF {
-        out[SUB] = diag + cm.sub_cost(q[i - 1], ch, i - 1);
-    }
-    if i >= 2 && parent == Some(q[i - 1]) && q[i - 2] == ch && q[i - 1] != q[i - 2] && skip2 < INF {
-        out[TRANSPOSE] = skip2 + cm.transpose_cost(i - 2);
-    }
-    if up < INF {
-        out[INSERT] = up + cm.ins_cost(ch, parent, i);
-    }
-    if i >= 1 && left < INF {
-        out[DELETE] = left + cm.del_cost(q, i - 1);
-    }
+    each_move(cm, q, i, ch, parent, diag, up, left, skip2, |k, v| {
+        out[k] = v;
+    });
     out
 }
 
-/// The smallest of the four candidates of [`moves`].
+/// The value of the cell: the smallest value of the moves of [`each_move`].
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn best(c: [Cost; 4]) -> Cost {
-    c[SUB].min(c[TRANSPOSE]).min(c[INSERT]).min(c[DELETE])
+fn cell_min(
+    cm: &CostModel,
+    q: &[u32],
+    i: usize,
+    ch: u32,
+    parent: Option<u32>,
+    diag: Cost,
+    up: Cost,
+    left: Cost,
+    skip2: Cost,
+) -> Cost {
+    let mut best = INF;
+    each_move(cm, q, i, ch, parent, diag, up, left, skip2, |_, v| {
+        best = best.min(v);
+    });
+    best
 }
 
 fn root_row(q: &[u32], cm: &CostModel, w: usize, budget: Cost) -> [Cost; ROW] {
@@ -329,8 +370,8 @@ fn root_row(q: &[u32], cm: &CostModel, w: usize, budget: Cost) -> [Cost; ROW] {
     row[w] = 0;
     for i in 1..=q.len().min(w) {
         // Row 0 of the term: only deletions (no term symbol, so `ch` is unused).
-        let c = moves(cm, q, i, 0, None, INF, INF, row[w + i - 1], INF);
-        row[w + i] = cap(best(c), budget);
+        let d = cell_min(cm, q, i, 0, None, INF, INF, row[w + i - 1], INF);
+        row[w + i] = cap(d, budget);
     }
     row
 }
@@ -362,8 +403,10 @@ fn child_row(
         // `prev` is D[i-2][j-2].
         let up = if k < 2 * w { cur[k + 1] } else { INF };
         let left = if k >= 1 { out[k - 1] } else { INF };
-        let c = moves(cm, q, i, ch, parent, cur[k], up, left, prev[k]);
-        out[k] = cap(best(c), budget);
+        out[k] = cap(
+            cell_min(cm, q, i, ch, parent, cur[k], up, left, prev[k]),
+            budget,
+        );
     }
     out
 }

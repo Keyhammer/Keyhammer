@@ -189,11 +189,13 @@ correct explanation of that cost).
 A traceback that recomputed the four moves with its own code could drift from the search (a
 changed doubled-letter rule, a factor applied at the wrong position), and the ranges would then
 explain a cost the search never computed. So the move costs are factored out of the search into
-one function, `search::moves`, that returns the four candidate values of a cell (substitution,
-transposition, insertion, deletion; `INF` when a move is not available) from its predecessors.
-The banded rows of the search (`root_row`, `child_row`) take the minimum of it; the traceback
-matrix is filled with the minimum of the same function, and the walk back compares each
-candidate with the cell's value. The cost model's functions (`sub_cost`, `ins_cost`,
+one function, `search::each_move`, that computes the value of each available move into a cell
+(substitution, transposition, insertion, deletion) from its predecessors and hands it to a
+closure. The banded rows of the search (`root_row`, `child_row`) fold the minimum (`cell_min`);
+the traceback collects the four values (`moves`, `INF` for a move that is not available), fills
+its matrix with their minimum, and the walk back compares each value with the cell's. (A first
+version returned the four values in an array to the search too; it made the search measurably
+slower, `docs/benchmarks/highlighting.md`, and was replaced by the closure.) The cost model's functions (`sub_cost`, `ins_cost`,
 `del_cost`, `transpose_cost`, with their layouts, first-symbol factor, doubled letters and
 transposition condition) are called only there.
 
