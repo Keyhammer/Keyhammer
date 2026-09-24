@@ -35,4 +35,11 @@ demand (Actions, "Run workflow", with a `seconds` input).
 
 `crates/keyhammer/tests/fuzz_like.rs` feeds the same properties with seeded
 pseudo-random bytes, so plain `cargo test -p keyhammer` covers them everywhere.
-It is a regression net, not a substitute for coverage-guided fuzzing.
+Structured inputs put terms within a few edits of the query. Measured with
+temporary counters, of the calls that reach a search: never_panics 20 000 calls,
+76% build a trie, 64% search, 56% return a hit, 7% return a full `k`;
+oracle_equality 4 000 calls, 99% search, 84% return a hit, 32% a full `k`;
+tsb_equivalence 8 000 calls, 99% search, 78% return a hit, 57% a full `k`. It
+catches these mutations of the core: dropping the transposition term in
+`lower_bound`, an under-counting `tsb` bound, and wrong `len_min`, `len_max` or
+`below_mask` trie metadata. It is a regression net, not a substitute for coverage-guided fuzzing.
