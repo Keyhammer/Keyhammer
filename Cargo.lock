@@ -255,6 +255,14 @@ name = "keyhammer"
 version = "0.1.0"
 
 [[package]]
+name = "keyhammer-bench"
+version = "0.1.0"
+dependencies = [
+ "keyhammer",
+ "keyhammer-legacy",
+]
+
+[[package]]
 name = "keyhammer-legacy"
 version = "0.1.0"
 dependencies = [
