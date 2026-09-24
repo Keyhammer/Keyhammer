@@ -454,6 +454,68 @@ mod tests {
         }
     }
 
+    /// A letter and its other case normalise alike whenever case folding is
+    /// on, so the lowercase and uppercase rows of the tables must agree. The
+    /// exceptions are documented policies: `ı` stays apart from `I` without
+    /// diacritic folding (no Turkic tailoring folds `I` to `i`), and `ŉ`
+    /// becomes `'n` by diacritic folding while its uppercase `ʼN` has a
+    /// modifier apostrophe (U+02BC) that no table covers.
+    #[test]
+    fn a_letter_and_its_other_case_normalise_alike() {
+        let mut checked = 0;
+        for n in [MODES[0], MODES[1]] {
+            for cp in FIRST..=LAST {
+                let Some(c) = char::from_u32(cp) else {
+                    continue;
+                };
+                if !c.is_alphabetic()
+                    || (cp == 0x131 && !n.folds_diacritics())
+                    || (cp == 0x149 && n.folds_diacritics())
+                {
+                    continue;
+                }
+                let upper: String = c.to_uppercase().collect();
+                let lower: String = c.to_lowercase().collect();
+                let want = norm(n, c);
+                assert_eq!(n.normalize(&upper), want, "{n:?} {c:?} vs {upper:?}");
+                assert_eq!(n.normalize(&lower), want, "{n:?} {c:?} vs {lower:?}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 370, "{checked}");
+    }
+
+    #[test]
+    fn portuguese_words_fold_in_both_cases() {
+        let n = Normalizer::new();
+        for (lower, upper, want) in [
+            ("coração", "CORAÇÃO", "coracao"),
+            ("não", "NÃO", "nao"),
+            ("pé", "PÉ", "pe"),
+            ("ônibus", "ÔNIBUS", "onibus"),
+            ("ação", "AÇÃO", "acao"),
+            ("são paulo", "SÃO PAULO", "sao paulo"),
+            ("você", "VOCÊ", "voce"),
+            ("põe", "PÕE", "poe"),
+            ("à", "À", "a"),
+        ] {
+            assert_eq!(n.normalize(lower), want, "{lower}");
+            assert_eq!(n.normalize(upper), want, "{upper}");
+        }
+        // Case only: the accents stay, lowercase.
+        let case = Normalizer::new().with_diacritic_folding(false);
+        for (upper, want) in [
+            ("CORAÇÃO", "coração"),
+            ("ÔNIBUS", "ônibus"),
+            ("VOCÊ", "você"),
+            ("PÕE", "põe"),
+            ("SÃO PAULO", "são paulo"),
+        ] {
+            assert_eq!(case.normalize(upper), want, "{upper}");
+            assert_eq!(case.normalize(want), want, "{want}");
+        }
+    }
+
     #[test]
     fn diacritic_folding_leaves_only_ascii_for_the_latin_letters() {
         let n = Normalizer::new();

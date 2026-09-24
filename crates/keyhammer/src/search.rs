@@ -1406,15 +1406,21 @@ mod tests {
     }
 
     fn check_prefix_mode(tsb: bool) -> Coverage {
-        check_prefix_mode_on(&ASCII_ALPHABETS, tsb)
+        check_prefix_mode_on(&ASCII_ALPHABETS, tsb, false)
     }
 
-    fn check_prefix_mode_on(alphabets: &[&str], tsb: bool) -> Coverage {
-        let cm = CostModel::qwerty();
+    /// With `all_layouts`, dictionary `d` uses layout `d % 6` (the ASCII run
+    /// keeps QWERTY, so that the counts quoted in `prefix-mode.md` hold).
+    fn check_prefix_mode_on(alphabets: &[&str], tsb: bool, all_layouts: bool) -> Coverage {
         let mut cov = Coverage::default();
         for (a, alpha) in alphabets.iter().enumerate() {
             let alpha = &syms(alpha);
             for d in 0..150 {
+                let cm = if all_layouts {
+                    CostModel::for_layout(Layout::ALL[d as usize % Layout::ALL.len()])
+                } else {
+                    CostModel::qwerty()
+                };
                 let mut rng = Rng::new((a as u64 + 1) * 1000 + d);
                 let dict = random_dictionary(&mut rng, alpha);
                 let items: Vec<(&str, u16)> = dict.iter().map(|(s, w)| (s.as_str(), *w)).collect();
@@ -1464,7 +1470,7 @@ mod tests {
     #[test]
     fn prefix_bound_never_exceeds_the_oracle_on_non_ascii_alphabets() {
         for tsb in [false, true] {
-            let cov = check_prefix_mode_on(&OTHER_ALPHABETS, tsb);
+            let cov = check_prefix_mode_on(&OTHER_ALPHABETS, tsb, true);
             assert!(cov.bounded > 10_000 && cov.terminals_within > 1_000 && cov.settled > 1_000);
         }
     }
