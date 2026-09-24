@@ -43,6 +43,11 @@ All notable changes to this project are documented here. The format follows
   OSA<=2 baseline (MRR@10 -0.031, SE 0.004), all of it on first-letter pairs; elsewhere
   +0.002 (SE 0.003); no measurable benefit of the adjacency costs; see
   `docs/benchmarks/finger-slips.md`.
+- `keyhammer-c` (`bindings/c`): a stable, handle-based C ABI (`kh_index_build`,
+  `kh_search`, explicit free functions, status codes with `kh_last_error`,
+  `kh_abi_version`), a cbindgen-generated `include/keyhammer.h` checked for
+  freshness in CI, a C smoke test compiled in CI, and `docs/design/c-abi.md`
+  with the ABI stability rules. Unsafe code is confined to this crate.
 - Fuzz targets (`crates/keyhammer/fuzz`, cargo-fuzz) for build and search
   robustness, brute-force oracle equality and `tsb` on/off equivalence, a
   weekly `fuzz` workflow, and a deterministic `tests/fuzz_like.rs` running the
