@@ -62,7 +62,8 @@ bound is the minimum over cells:
   anywhere below the node.
 
 With keyboard-weighted costs, in our engine this cut the number of trie nodes
-expanded by 33-35% with identical results on real typo data.
+expanded by 33-35% with identical results on real typo data (the project's own
+benchmark, documented in `docs/benchmarks/m0.md`).
 
 The four columns ask: (a) does the work keep a length range per subtree/node,
 (b) a letter set or mask per subtree/node, (c) does it add those to the
@@ -72,7 +73,7 @@ keyboard. `unknown (not read)` means we did not read enough of the work to say.
 | Work | Length range per subtree | Letter mask per subtree | Combined with accumulated DP cost | Weighted by keyboard | Notes |
 |---|---|---|---|---|---|
 | Trie-Join, Wang, Feng, Li, PVLDB 2010 (and VLDB J. 2012) | **yes**: each node stores `[ls, ll]`, the shortest and longest string lengths in its subtrie | no | no: prunes a pair of nodes when their length ranges differ by more than the threshold; not added to a DP row | no (unit cost) | Closest prior art for the length half of the TSB. Used in a join with a fixed threshold, as a yes/no filter on active-node pairs. |
-| Bed-tree, Zhang, Hadjieleftheriou, Ooi, Srivastava, SIGMOD 2010 ([PDF copy](http://index.cslt.org/mediawiki/images/3/3e/%E5%AE%81%E5%8F%AF_2015-08-21_2010_Bed-tree-_an_all-purpose_index_structure_for_string_similarity_search_based_on_edit_distance.pdf), [ACM](https://dl.acm.org/doi/10.1145/1807167.1807266)) | partly: requires a "length bounding" string order, i.e. an upper bound on the length of any string in a node's interval | partly: the gram-counting order bounds hashed n-gram bucket counts per interval; the dictionary order uses a candidate letter set, but for one position only | partly: the dictionary-order bound runs the edit-distance DP over the interval's common prefix plus that one-position letter set | no (edit distance and normalised edit distance) | Node-level lower bounds on edit distance inside a B+-tree, supporting range, top-k and join queries. Closest prior art for "a per-node summary gives an admissible lower bound". Not a trie; the length and letter parts are separate string orders, not combined. |
+| Bed-tree, Zhang, Hadjieleftheriou, Ooi, Srivastava, SIGMOD 2010 ([ACM](https://dl.acm.org/doi/10.1145/1807167.1807266)) | partly: requires a "length bounding" string order, i.e. an upper bound on the length of any string in a node's interval | partly: the gram-counting order bounds hashed n-gram bucket counts per interval; the dictionary order uses a candidate letter set, but for one position only | partly: the dictionary-order bound runs the edit-distance DP over the interval's common prefix plus that one-position letter set | no (edit distance and normalised edit distance) | Node-level lower bounds on edit distance inside a B+-tree, supporting range, top-k and join queries. Closest prior art for "a per-node summary gives an admissible lower bound". Not a trie; the length and letter parts are separate string orders, not combined. |
 | Boytsov 2011, "Indexing Methods for Approximate Dictionary Searching: Comparative Analysis", ACM Journal of Experimental Algorithmics, 2011 ([author preprint PDF](http://boytsov.info/pubs/jea2011.pdf); volume details not checked) | no (length-divided indexes are a separate method) | **per string, not per subtree**: a string's signature is the bit vector of alphabet characters it contains, optionally over a hashed, reduced alphabet | no: signatures are compared by frequency distance, which is a lower bound on edit distance, as a filter (signature hashing, vector tries) | no | Shows the letter-mask idea, including reduced alphabets whose collisions only loosen the bound, is folklore; the survey traces signature filtering back to Damerau 1964 and 1970s spell-checkers. We did not read every method in this 90-page survey. |
 | Oflazer 1996, "Error-tolerant Finite-state Recognition...", Computational Linguistics 22(1) ([PDF](https://aclanthology.org/J96-1003.pdf)) | no | no | yes, in its basic form: the "cut-off edit distance" is the minimum over a window of the current DP column, used to abandon a branch of the automaton | no (unit cost) | This is the classical row-minimum lower bound that the TSB strengthens. |
 | Hsu & Ottaviano 2013 | no | no | no (exact prefix only) | no | Per-node summary of a different quantity (maximum score) with best-first search. Same "store a max/min per subtree to guide a priority queue" pattern. |
@@ -96,14 +97,15 @@ both summaries stored on every trie node, turned into cost terms (the
 cheapest indel times the length gap; the cheapest edit times the number of
 missing letter classes), joined with `max` and added cell by cell to the
 accumulated cost of a best-first DP walk under keyboard-weighted costs. That
-is not strong evidence of novelty. Our search was about twenty web queries,
-listed below, plus reading about ten papers; it was not a systematic survey,
+is not strong evidence of novelty. Our search was 13 targeted web queries plus one
+bibliographic lookup per reference (listed below), plus reading about ten papers; it was not a systematic survey,
 and the combination may exist in work we did not reach. So we will not say
 "we invented". Honest wording: "we apply the per-subtree length ranges of
 Trie-Join and the character-signature filters of approximate dictionary
 search as an admissible, cost-weighted lower bound inside a best-first trie
 search with a weighted edit distance, and measure its effect (33-35% fewer
-nodes expanded, same results)." The name "Trasel Signature Bound" should be
+nodes expanded, same results, per the project's own benchmark in
+`docs/benchmarks/m0.md`)." The name "Trasel Signature Bound" should be
 presented as a name for this engineering combination, not as a new
 technique.
 

@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- New `keyhammer` core crate (M0 prototype): keyboard-weighted cost model, flat
+  trie, exact best-first search, and brute-force oracle tests.
+- CI workflow for the core crate.
+- `bench/` harnesses and the dataset fetch script.
+- `docs/papers.md` (reference check and prior art) and `docs/benchmarks/m0.md`
+  (M0 benchmark results).
+
 ### Changed
 - License changed from MIT to AGPL-3.0-or-later, effective from the commit
   "chore: relicense to AGPL-3.0-or-later". Versions obtained before that commit
