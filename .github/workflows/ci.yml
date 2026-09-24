@@ -77,3 +77,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # Stand-alone crate outside the workspace, with its own lockfile.
       - run: cargo check --locked --manifest-path bench/competitors/Cargo.toml
+
+  # Keeps the JavaScript comparison runnable: builds the WebAssembly module, prepares the
+  # smallest dictionary and runs a tiny smoke configuration (not the benchmark).
+  bench-js-competitors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: |
+          remap="--remap-path-prefix=${GITHUB_WORKSPACE}=/src"
+          remap="$remap --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+          remap="$remap --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
+          RUSTFLAGS="$remap" cargo build -p keyhammer-wasm --target wasm32-unknown-unknown --profile wasm
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Prepare the data
+        working-directory: bench
+        run: |
+          npm ci
+          node fetch-data.mjs
+          node prepare-m0-data.mjs
+      - name: Smoke run
+        working-directory: bench/js-competitors
+        run: |
+          npm ci
+          node --expose-gc run.mjs --sizes 10000 --corpora birkbeck --queries 20 --repetitions 1 --min-queries 20 --builds 1 --load-runs 2
