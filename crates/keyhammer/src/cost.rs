@@ -18,9 +18,10 @@ pub const COST_UNIT: Cost = 16;
 /// The weighted `cost` rounded up to whole units of [`COST_UNIT`]: 0 stays 0,
 /// 1 to 16 is one unit, 17 to 32 two units, and so on.
 ///
-/// This is not a count of edits. An ordinary edit on the first query byte
-/// costs 24 (16 x 1.5), so it counts as two units, and two cheap edits
-/// (8 + 8) count as one.
+/// This is not a count of edits. The x1.5 factor on the first query byte
+/// makes an ordinary (non-neighbouring-key) edit there cost 24, i.e. two
+/// units, while a neighbouring-key substitution there costs 12 (one unit) and
+/// a transposition 18 (two units); two cheap edits (8 + 8) count as one.
 #[inline]
 pub fn whole_units(cost: Cost) -> Cost {
     cost.div_ceil(COST_UNIT)

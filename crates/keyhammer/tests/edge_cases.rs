@@ -5,7 +5,7 @@
 
 mod support;
 
-use keyhammer::cost::CostModel;
+use keyhammer::cost::{CostModel, whole_units};
 use keyhammer::search::{MAX_QUERY_LEN, Ranking, SearchConfig, SearchError, Searcher};
 use keyhammer::trie::Trie;
 use support::oracle_topk;
@@ -369,6 +369,34 @@ fn first_byte_edits_count_as_two_units() {
         assert_eq!(
             run(&trie, b"bat", &cfg),
             vec![(bad, 16), (cat, 24)],
+            "tsb={tsb} ranking={ranking:?}"
+        );
+    }
+}
+
+#[test]
+fn first_byte_units_depend_on_the_kind_of_edit() {
+    // The x1.5 factor on the first byte: a neighbouring-key substitution
+    // ('v' for 'b') costs 12, one unit; an ordinary substitution ('b' for
+    // 'c') costs 24, two units.
+    let cm = CostModel::qwerty();
+    let neighbour = cm.sub_cost(b'v', b'b', 0);
+    let ordinary = cm.sub_cost(b'b', b'c', 0);
+    assert_eq!((neighbour, whole_units(neighbour)), (12, 1));
+    assert_eq!((ordinary, whole_units(ordinary)), (24, 2));
+    let transpose = cm.transpose_cost(0);
+    assert_eq!((transpose, whole_units(transpose)), (18, 2));
+    // The search reports the same true costs: "vat" is 12 from "bat".
+    let trie = Trie::build(&[("bat", 1)]).unwrap();
+    for (tsb, ranking) in modes() {
+        let cfg = SearchConfig {
+            tsb,
+            ranking,
+            ..SearchConfig::default()
+        };
+        assert_eq!(
+            run(&trie, b"vat", &cfg),
+            vec![(0, 12)],
             "tsb={tsb} ranking={ranking:?}"
         );
     }
