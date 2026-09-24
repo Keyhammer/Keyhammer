@@ -471,29 +471,63 @@ mod tests {
         d
     }
 
-    /// The cost of the walked path, each step recomputed from the cost
-    /// model here (not through `moves`), and a check that the path is a
-    /// connected walk from the end cell to (0, 0) with legal moves.
-    fn path_cost(cm: &CostModel, q: &[u32], t: &[u32], path: &[(usize, usize, usize)]) -> u32 {
+    /// The value of each move into `d[j][i]`, in the documented tie order
+    /// (diagonal, transposition, insertion, deletion), computed here from the
+    /// cost model (not through `moves`); `None` if the move is not available.
+    fn candidates(
+        cm: &CostModel,
+        q: &[u32],
+        t: &[u32],
+        d: &[Vec<u32>],
+        i: usize,
+        j: usize,
+    ) -> [Option<u32>; 4] {
+        let mut c = [None; 4];
+        if i >= 1 && j >= 1 {
+            c[0] = Some(d[j - 1][i - 1] + u32::from(cm.sub_cost(q[i - 1], t[j - 1], i - 1)));
+        }
+        if i >= 2 && j >= 2 && q[i - 1] == t[j - 2] && q[i - 2] == t[j - 1] && q[i - 1] != q[i - 2]
+        {
+            c[1] = Some(d[j - 2][i - 2] + u32::from(cm.transpose_cost(i - 2)));
+        }
+        if j >= 1 {
+            let prev = if j >= 2 { Some(t[j - 2]) } else { None };
+            c[2] = Some(d[j - 1][i] + u32::from(cm.ins_cost(t[j - 1], prev, i)));
+        }
+        if i >= 1 {
+            c[3] = Some(d[j][i - 1] + u32::from(cm.del_cost(q, i - 1)));
+        }
+        c
+    }
+
+    /// Checks the walked path against the independent matrix `d`: it is a
+    /// connected walk from its end cell to (0, 0), each step is the first
+    /// move in the documented tie order that attains the cell's value, and
+    /// the step costs sum to the value of the end cell, which is returned.
+    fn check_path(
+        cm: &CostModel,
+        q: &[u32],
+        t: &[u32],
+        d: &[Vec<u32>],
+        path: &[(usize, usize, usize)],
+    ) -> u32 {
         let mut total = 0u32;
         let mut expect_at: Option<(usize, usize)> = None;
         for &(mv, i, j) in path {
             if let Some(at) = expect_at {
                 assert_eq!(at, (i, j), "path not connected");
             }
-            let (c, next) = match mv {
-                SUB => (cm.sub_cost(q[i - 1], t[j - 1], i - 1), (i - 1, j - 1)),
-                TRANSPOSE => {
-                    assert!(q[i - 1] == t[j - 2] && q[i - 2] == t[j - 1] && q[i - 1] != q[i - 2]);
-                    (cm.transpose_cost(i - 2), (i - 2, j - 2))
-                }
-                INSERT => {
-                    let prev = if j >= 2 { Some(t[j - 2]) } else { None };
-                    (cm.ins_cost(t[j - 1], prev, i), (i, j - 1))
-                }
-                _ => (cm.del_cost(q, i - 1), (i - 1, j)),
+            let c = candidates(cm, q, t, d, i, j);
+            let order = [SUB, TRANSPOSE, INSERT, DELETE];
+            let first = c.iter().position(|&v| v == Some(d[j][i]));
+            assert_eq!(first.map(|k| order[k]), Some(mv), "tie rule at ({i}, {j})");
+            let (prev, next) = match mv {
+                SUB => (d[j - 1][i - 1], (i - 1, j - 1)),
+                TRANSPOSE => (d[j - 2][i - 2], (i - 2, j - 2)),
+                INSERT => (d[j - 1][i], (i, j - 1)),
+                _ => (d[j][i - 1], (i - 1, j)),
             };
-            total += u32::from(c);
+            total += d[j][i] - prev;
             expect_at = Some(next);
         }
         assert_eq!(
@@ -511,8 +545,9 @@ mod tests {
     const ALPHABETS: [&str; 6] = ["aqw", "asdfqwer", "abcdefghij", "aeéèçß", "жзaЖ😀", "çlp.;"];
 
     /// For random dictionaries and queries, every hit of both modes is
-    /// highlighted; the path is legal, its step costs sum to the hit's cost,
-    /// which is the oracle cost; the statuses agree with the path.
+    /// highlighted; the path is legal, follows the tie rule, and its step
+    /// costs sum to the hit's cost, which is the oracle cost; the statuses
+    /// agree with the path.
     #[test]
     fn traceback_cost_equals_oracle_and_hit_cost() {
         let rounds = if cfg!(miri) { 3 } else { 120 };
@@ -567,8 +602,8 @@ mod tests {
                             let h = s
                                 .highlight(&trie, &cm, qs.as_bytes(), &hit, term, mode)
                                 .unwrap_or_else(|e| panic!("{e} q={qs:?} t={term:?} {mode:?}"));
-                            let col: Vec<u32> =
-                                oracle(&cm, &q, &t).iter().map(|r| r[q.len()]).collect();
+                            let d = oracle(&cm, &q, &t);
+                            let col: Vec<u32> = d.iter().map(|r| r[q.len()]).collect();
                             let want = match mode {
                                 HighlightMode::Whole => col[t.len()],
                                 _ => col.iter().copied().min().unwrap_or(u32::MAX),
@@ -577,7 +612,7 @@ mod tests {
                             assert_eq!(h.cost, hit.cost);
                             let sc = &s.hl;
                             assert_eq!(
-                                path_cost(&cm, &q, &t, &sc.path),
+                                check_path(&cm, &q, &t, &d, &sc.path),
                                 want,
                                 "q={qs:?} t={term:?}"
                             );
