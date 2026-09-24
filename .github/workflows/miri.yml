@@ -20,11 +20,22 @@ env:
 jobs:
   miri:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: miri
       - run: cargo miri setup
-      - run: cargo miri test -p keyhammer
+      # The brute-force oracle comparisons run thousands of seeded searches;
+      # under Miri they need far more than 45 minutes (a first run of the whole
+      # suite timed out) and add nothing for undefined behaviour, since the
+      # same code paths run in the other tests. They are skipped by name here
+      # (no source changes) and still run in the normal `test` job. Locally this
+      # takes about a minute.
+      - run: >
+          cargo miri test -p keyhammer --
+          --skip lower_bound_never_exceeds
+          --skip matches_the_oracle
+          --skip both_rankings
+          --skip tsb_and_plain
