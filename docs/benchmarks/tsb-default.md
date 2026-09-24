@@ -1,6 +1,6 @@
 # Should `SearchConfig::default()` enable the subtree bound? (issue #49), 2026-09-24
 
-Decision: yes. `SearchConfig::default()` now has `tsb = true`. Results are identical with it on or off; the only cost is none that could be measured, because the per-node signature data is built either way. `tsb: false` remains available.
+Decision: yes. `SearchConfig::default()` now has `tsb = true`. Results are identical with it on or off, unless `max_nodes` truncates a search (then both modes return a correct prefix of the same ranked list, possibly of different length). No cost could be measured: the per-node signature data is built either way. `tsb: false` remains available.
 
 ## Summary
 
@@ -44,6 +44,6 @@ The budget-48 rows (`hr` vs `hr+tsb`, `recall-preset.md`) show the same directio
 
 ## Consequences
 
-- Semver: pre-1.0, so a behaviour change to a default is allowed in a minor release; it is noted in the CHANGELOG. Hits, order and `Hit::cost` do not change. What changes: `Stats::nodes_expanded` and `Stats::nodes_pushed` are lower for the same query, and a search that used to hit `max_nodes` may now complete (the truncation point depends on the work done; nothing was observed to truncate in these runs).
+- Semver: pre-1.0, so a behaviour change to a default is allowed in a minor release; it is noted in the CHANGELOG. Hits, order and `Hit::cost` do not change, except that if `max_nodes` stops a search, both modes return a correct prefix of the same ranked list, but its length can differ. What changes: `Stats::nodes_expanded` and `Stats::nodes_pushed` are lower for the same query, and a search that used to hit `max_nodes` may now complete (the truncation point depends on the work done; nothing was observed to truncate in these runs).
 - Callers who want the previous behaviour set `tsb: false`. The WebAssembly interface has no such option (it builds its config from `SearchConfig::default()`), so wasm searches now run with the bound on; the numbers in `competitors-js.md` were taken with it off and are not re-measured here.
 - `SearchConfig::high_recall()` sets `tsb: true` explicitly; this is now redundant but harmless, and keeps the preset independent of the default.

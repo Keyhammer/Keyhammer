@@ -76,7 +76,7 @@ pub struct SearchConfig {
     pub budget: Cost,
     /// Use the subtree-signature lower bound (on by default).
     ///
-    /// It never changes the results, only how much work is done: in
+    /// It never changes the results of a search that finishes within `max_nodes`, only how much work is done; if the node limit stops a search, both modes return a correct prefix of the same ranked list, but its length can differ. In
     /// `docs/benchmarks/tsb-default.md` it expanded about a third fewer trie
     /// nodes and lowered p95 latency by about a fifth (one machine, one
     /// corpus). The per-node data it reads is built by [`Trie::build`]

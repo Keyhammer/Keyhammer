@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - `SearchConfig::default()` now has `tsb: true` (the subtree bound was off). Hits, order and
-  costs are unchanged (oracle-tested); on the 300 Birkbeck typo pairs it expands 33-35% fewer nodes with
+  costs are unchanged unless `max_nodes` truncates a search (then both modes return a correct prefix of the same list, possibly of different length) (oracle-tested); on the 300 Birkbeck typo pairs it expands 33-35% fewer nodes with
   about 19-21% lower p95 latency at the default budget (one machine, shared, median of three runs),
   and costs no extra memory (the per-node data is always built). `Stats` node counts change, and the
   WebAssembly module, which builds its config from the default, now runs with the bound on. Set
