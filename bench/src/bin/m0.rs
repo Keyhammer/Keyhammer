@@ -45,6 +45,8 @@ EXIT STATUS:
 
 The gate checks are (b) p95 legacy / new >= 10x and (c) MRR of new+tsb >= baseline.
 The paired-interval line (c') is informational and does not affect the exit status.
+On the published data (c) fails at 274137 words, so status 1 is the expected result; it
+is the documented G0 PARTIAL PASS (docs/benchmarks/m0.md), not a regression.
 Each engine runs the whole query list once, untimed, before it is timed (the
 baseline, a full scan per query, runs its first 20 queries).
 ";
@@ -59,6 +61,7 @@ fn read_tsv(path: &str) -> Vec<(String, String)> {
     });
     text.lines()
         .enumerate()
+        .filter(|(_, l)| !l.is_empty())
         .map(|(i, l)| match l.split_once('\t') {
             Some((a, b)) => (a.to_string(), b.to_string()),
             None => die(&format!(
@@ -158,7 +161,8 @@ fn osa_within(a: &[u8], b: &[u8], k: usize) -> Option<usize> {
     (d[m][n] <= k).then_some(d[m][n])
 }
 
-fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
+/// Runs every engine on one dictionary; returns the rows and the number of words.
+fn run(size: &str, dir: &str, tests: &[(String, String)]) -> (Vec<Row>, usize) {
     let words: Vec<(String, u16)> = read_tsv(&format!("{dir}/words-{size}.tsv"))
         .into_iter()
         .enumerate()
@@ -170,6 +174,9 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
             )),
         })
         .collect();
+    if words.is_empty() {
+        die(&format!("{dir}/words-{size}.tsv: no words"));
+    }
     let mut rows = Vec::new();
     println!("\n=== dictionary: {} words ({size}) ===", words.len());
 
@@ -350,7 +357,8 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
             hr.p95_us / tsb.p95_us
         );
     }
-    rows
+    let n_words = words.len();
+    (rows, n_words)
 }
 
 fn main() {
@@ -368,13 +376,25 @@ fn main() {
     }
     let dir = dir.unwrap_or_else(|| "bench/data".to_string());
     let tests = read_tsv(&format!("{dir}/tests.tsv"));
+    if tests.is_empty() {
+        die(&format!("{dir}/tests.tsv: no typo pairs"));
+    }
     println!("{} typo pairs", tests.len());
     let mut last = Vec::new();
     // Legacy searches that errored, over all sizes: the legacy latency is not
     // comparable when some searches bail out early.
+    // Word counts of the dictionaries where the strict MRR check (c) fails.
+    let mut mrr_fails: Vec<usize> = Vec::new();
     let mut legacy_errors = 0usize;
     for size in ["10000", "100000", "full"] {
-        last = run(size, &dir, &tests);
+        let (rows, n_words) = run(size, &dir, &tests);
+        last = rows;
+        let get = |n: &str| last.iter().find(|r| r.name == n);
+        if let (Some(tsb), Some(base)) = (get("new+tsb"), get("baseline")) {
+            if tsb.mrr < base.mrr {
+                mrr_fails.push(n_words);
+            }
+        }
         legacy_errors += last.iter().map(|r| r.errors).sum::<usize>();
     }
     let mut failed = legacy_errors > 0;
@@ -412,8 +432,18 @@ FAIL: {legacy_errors} legacy searches returned an error"
             "  (c') no evidence of being worse (need diff + {Z95} SE >= 0: {m:+.4} + {Z95} x {se:.4} = {hi:+.4}): {}",
             if hi >= 0.0 { "PASS" } else { "FAIL" }
         );
+        let mrr_part = if mrr_fails.is_empty() {
+            "the strict MRR check (c) passes at every size".to_string()
+        } else {
+            let sizes: Vec<String> = mrr_fails.iter().map(usize::to_string).collect();
+            format!(
+                "the strict MRR check (c) fails at {} words",
+                sizes.join(" and ")
+            )
+        };
         println!(
-            "G0 under the original criteria remains a partial pass: speed passes, the strict MRR check (c) fails at 100000 and 274137 words. (c') is informational: it says only that these data do not show the new ranking to be worse than the baseline; it does not by itself pass G0, and any non-inferiority margin for a future run should be fixed in advance."
+            "G0 under the original criteria: speed {}, {mrr_part}. (c') is informational: it says only that these data do not show the new ranking to be worse than the baseline; it does not by itself pass G0, and any non-inferiority margin for a future run should be fixed in advance.",
+            if ratio >= 10.0 { "passes" } else { "fails" }
         );
         println!("oracle equality: run `cargo test -p keyhammer` (must be green)");
     } else {

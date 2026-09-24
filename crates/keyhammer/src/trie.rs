@@ -224,7 +224,7 @@ impl Trie {
     /// # Examples
     ///
     /// ```
-    /// use keyhammer::trie::{NO_TERM, Trie};
+    /// use keyhammer::trie::Trie;
     /// let trie = Trie::build(&[("car", 9), ("cat", 4)]).unwrap();
     /// // Nodes in breadth-first order: root, c, a, r, t.
     /// assert_eq!(trie.node_count(), 5);
@@ -255,7 +255,7 @@ impl Trie {
     /// # Examples
     ///
     /// ```
-    /// use keyhammer::trie::{NO_TERM, Trie};
+    /// use keyhammer::trie::Trie;
     /// let trie = Trie::build(&[("car", 9), ("cat", 4)]).unwrap();
     /// // Nodes in breadth-first order: root, c, a, r, t.
     /// assert_eq!(trie.node_count(), 5);
@@ -302,7 +302,7 @@ impl Trie {
     /// # Examples
     ///
     /// ```
-    /// use keyhammer::trie::{NO_TERM, Trie};
+    /// use keyhammer::trie::Trie;
     /// let trie = Trie::build(&[("car", 9), ("cat", 4)]).unwrap();
     /// // Nodes in breadth-first order: root, c, a, r, t.
     /// assert_eq!(trie.node_count(), 5);
