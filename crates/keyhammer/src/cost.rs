@@ -10,6 +10,19 @@
 /// A fixed-point edit cost (16 = one ordinary edit).
 pub type Cost = u16;
 
+/// The cost of one ordinary edit. Every cost in the table below is expressed
+/// in these units: cheaper edits (a neighbouring key, a doubled letter, a
+/// transposition) cost a fraction of it, edits on the first byte cost more.
+pub const COST_UNIT: Cost = 16;
+
+/// Number of edits a weighted `cost` amounts to: `cost / COST_UNIT`, rounded
+/// up. Any non-zero cost counts as at least one edit; costs of 1 to 16 are one
+/// edit, 17 to 32 two edits, and so on.
+#[inline]
+pub fn edit_count(cost: Cost) -> Cost {
+    cost.div_ceil(COST_UNIT)
+}
+
 /// Sentinel for "unreachable or over budget". `INF` plus any single edit cost
 /// still fits in a `u16`.
 pub const INF: Cost = 30_000;
