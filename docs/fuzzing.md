@@ -10,6 +10,7 @@ its CI need neither nightly nor libFuzzer.
 | `never_panics` | Building and searching on arbitrary bytes, with an arbitrary `k`, budget, node limit, ranking and `tsb`, returns `Ok` or `Err` and never panics; hits respect `k` and the budget. |
 | `oracle_equality` | On small inputs, hits equal a brute-force reference (`tests/support`), for `tsb` on and off and both rankings. |
 | `tsb_equivalence` | Results with `tsb: true` equal those with `tsb: false`. |
+| `prefix_oracle_equality` | `search_prefix` hits equal a brute-force prefix reference (minimum over all term prefixes), for `tsb` on and off and both rankings; a node-limited run returns true costs. |
 
 Input layouts are documented in `crates/keyhammer/tests/fuzz_props/mod.rs`, which
 holds the properties themselves.
@@ -22,6 +23,7 @@ cd crates/keyhammer
 cargo +nightly fuzz run never_panics -- -max_total_time=60
 cargo +nightly fuzz run oracle_equality
 cargo +nightly fuzz run tsb_equivalence
+cargo +nightly fuzz run prefix_oracle_equality
 ```
 
 libFuzzer works best on Linux and macOS; on Windows use WSL. Corpora and crash

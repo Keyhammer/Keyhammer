@@ -104,6 +104,10 @@ pub fn never_panics(data: &[u8]) {
         ranking: ranking(flags),
     };
     let cm = CostModel::for_layout(layout(flags));
+    if let Ok(out) = Searcher::new().search_prefix(&trie, &cm, q, &cfg) {
+        assert!(out.hits.len() <= k);
+        assert!(out.hits.iter().all(|h| h.cost <= budget));
+    }
     if let Ok(out) = Searcher::new().search(&trie, &cm, q, &cfg) {
         assert!(out.hits.len() <= k);
         assert!(out.hits.iter().all(|h| h.cost <= budget));
@@ -198,4 +202,60 @@ pub fn tsb_equivalence(data: &[u8]) {
     let off = run(false);
     let on = run(true);
     assert_eq!(off, on, "q={q:?} terms={terms:?} budget={budget} k={k}");
+}
+
+/// Prefix mode. Layout as [`oracle_equality`]. `search_prefix` must equal the
+/// brute-force prefix oracle (the smallest cost over all prefixes of a term),
+/// for both rankings and `tsb` on and off; a node-limited run must return
+/// true prefix costs within the budget in the exact order's first positions.
+pub fn prefix_oracle_equality(data: &[u8]) {
+    let mut c = Cursor(data);
+    let flags = c.u8();
+    let k = 1 + usize::from(c.u8() % 12);
+    let budget = u16::from(c.u8() % 65);
+    let qlen = (usize::from(c.u8()) % 17).min(c.0.len());
+    let (qraw, rest) = c.0.split_at(qlen);
+    let q = fold_query(qraw);
+    let terms = parse_terms(rest, 24, true);
+    let Some(trie) = build(&terms) else {
+        return;
+    };
+    let cm = CostModel::qwerty();
+    let mut s = Searcher::new();
+    for rk in [Ranking::Coarse, Ranking::Exact] {
+        let want = crate::support::oracle_topk_prefix(&trie, &cm, &q, budget, k, rk);
+        for tsb in [false, true] {
+            let cfg = SearchConfig {
+                k,
+                budget,
+                tsb,
+                max_nodes: usize::MAX,
+                ranking: rk,
+            };
+            let out = s.search_prefix(&trie, &cm, &q, &cfg).unwrap();
+            let got: Vec<(u32, u16)> = out.hits.iter().map(|h| (h.id, h.cost)).collect();
+            assert_eq!(
+                got, want,
+                "q={q:?} terms={terms:?} budget={budget} k={k} tsb={tsb} {rk:?}"
+            );
+            let cfg = SearchConfig {
+                max_nodes: 1 + usize::from(flags >> 2) % 40,
+                ..cfg
+            };
+            let out = s.search_prefix(&trie, &cm, &q, &cfg).unwrap();
+            let got: Vec<(u32, u16)> = out.hits.iter().map(|h| (h.id, h.cost)).collect();
+            if out.stats.truncated {
+                assert_eq!(
+                    got[..],
+                    want[..got.len()],
+                    "truncated, q={q:?} terms={terms:?}"
+                );
+            } else {
+                assert_eq!(
+                    got, want,
+                    "untruncated limited run, q={q:?} terms={terms:?}"
+                );
+            }
+        }
+    }
 }

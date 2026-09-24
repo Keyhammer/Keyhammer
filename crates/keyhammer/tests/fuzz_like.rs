@@ -153,3 +153,13 @@ fn tsb_does_not_change_results() {
         fuzz_props::tsb_equivalence,
     );
 }
+
+#[test]
+fn prefix_matches_the_oracle() {
+    run(
+        4,
+        4_000,
+        |r| structured(r, 20),
+        fuzz_props::prefix_oracle_equality,
+    );
+}

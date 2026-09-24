@@ -461,3 +461,216 @@ fn budget_48_reaches_a_term_six_deletions_away() {
         );
     }
 }
+
+// ---- prefix mode ----
+
+fn run_prefix(trie: &Trie, q: &[u8], cfg: &SearchConfig) -> Vec<(u32, u16)> {
+    let cm = CostModel::qwerty();
+    Searcher::new()
+        .search_prefix(trie, &cm, q, cfg)
+        .unwrap()
+        .hits
+        .iter()
+        .map(|h| (h.id, h.cost))
+        .collect()
+}
+
+fn prefix_terms(trie: &Trie, hits: &[(u32, u16)]) -> Vec<String> {
+    hits.iter()
+        .map(|&(id, _)| trie.term(id).to_string())
+        .collect()
+}
+
+#[test]
+fn prefix_empty_query_returns_the_heaviest_terms_at_cost_zero() {
+    let trie = words();
+    for (tsb, ranking) in modes() {
+        let cfg = SearchConfig {
+            k: 3,
+            tsb,
+            ranking,
+            ..SearchConfig::default()
+        };
+        let hits = run_prefix(&trie, b"", &cfg);
+        assert_eq!(prefix_terms(&trie, &hits), ["help", "hello", "café"]);
+        assert!(hits.iter().all(|h| h.1 == 0));
+        // The exact mode, by contrast, only matches terms within the budget of "".
+        assert_eq!(run(&trie, b"", &cfg).len(), 1);
+    }
+}
+
+#[test]
+fn prefix_of_a_term_costs_zero_and_the_term_itself_too() {
+    let trie = words();
+    for (tsb, ranking) in modes() {
+        let cfg = SearchConfig {
+            k: 10,
+            tsb,
+            ranking,
+            ..SearchConfig::default()
+        };
+        // "hel" starts "hello" and "help"; the heavier one first.
+        let hits = run_prefix(&trie, b"hel", &cfg);
+        assert_eq!(prefix_terms(&trie, &hits), ["help", "hello"]);
+        assert!(hits.iter().all(|h| h.1 == 0));
+        // A query equal to a term also returns its extensions ("a", "ab", "abc").
+        let hits = run_prefix(&trie, b"ab", &cfg);
+        assert_eq!(hits[0].1, 0);
+        assert_eq!(prefix_terms(&trie, &hits)[..2], ["abc", "ab"]);
+    }
+}
+
+#[test]
+fn prefix_query_longer_than_every_term_still_matches_within_the_budget() {
+    let trie = Trie::build(&[("ab", 1), ("abc", 2)]).unwrap();
+    for (tsb, ranking) in modes() {
+        let cfg = SearchConfig {
+            k: 10,
+            budget: 32,
+            tsb,
+            ranking,
+            ..SearchConfig::default()
+        };
+        // Two extra typed letters: two deletions from "ab".
+        let want = oracle_prefix(&trie, b"abxy", &cfg);
+        assert_eq!(run_prefix(&trie, b"abxy", &cfg), want);
+        assert!(!want.is_empty());
+        // Far too long for the budget.
+        assert!(run_prefix(&trie, b"abxyzxyz", &cfg).is_empty());
+    }
+}
+
+fn oracle_prefix(trie: &Trie, q: &[u8], cfg: &SearchConfig) -> Vec<(u32, u16)> {
+    support::oracle_topk_prefix(
+        trie,
+        &CostModel::qwerty(),
+        q,
+        cfg.budget,
+        cfg.k,
+        cfg.ranking,
+    )
+}
+
+#[test]
+fn prefix_transposition_at_the_cut_point() {
+    // The swap "ba" -> "ab" is inside the prefix "ba" of "bax": cost 18 (12, x1.5 at the first byte).
+    // A swap that would straddle the cut ("b" typed, term "ab...") is not a
+    // transposition: the prefix "a" or "ab" is aligned to the whole query.
+    let trie = Trie::build(&[("bax", 1), ("abx", 1), ("b", 1)]).unwrap();
+    for (tsb, ranking) in modes() {
+        let cfg = SearchConfig {
+            k: 10,
+            budget: 32,
+            tsb,
+            ranking,
+            ..SearchConfig::default()
+        };
+        for q in [&b"ab"[..], b"ba", b"b", b"a", b"abx", b"bax", b"xab"] {
+            assert_eq!(
+                run_prefix(&trie, q, &cfg),
+                oracle_prefix(&trie, q, &cfg),
+                "q={:?}",
+                String::from_utf8_lossy(q)
+            );
+        }
+        let hits = run_prefix(&trie, b"ab", &cfg);
+        // "abx" matches at 0 by its prefix "ab"; "bax" through the swap at 18.
+        assert_eq!(prefix_terms(&trie, &hits)[0], "abx");
+        let bax = hits.iter().find(|h| trie.term(h.0) == "bax").unwrap();
+        assert_eq!(bax.1, 18);
+    }
+}
+
+#[test]
+fn prefix_cost_is_the_best_prefix_and_never_above_the_exact_cost() {
+    let trie = Trie::build(&[("hello", 5), ("help", 5), ("helicopter", 5)]).unwrap();
+    let cm = CostModel::qwerty();
+    let mut s = Searcher::new();
+    let cfg = SearchConfig {
+        k: 10,
+        budget: 48,
+        ranking: Ranking::Exact,
+        ..SearchConfig::default()
+    };
+    for q in [&b"hel"[..], b"hwl", b"heli", b"hellp", b"xelp"] {
+        let ex = s.search(&trie, &cm, q, &cfg).unwrap().hits;
+        let pre = s.search_prefix(&trie, &cm, q, &cfg).unwrap().hits;
+        for h in &ex {
+            let p = pre.iter().find(|p| p.id == h.id).unwrap();
+            assert!(p.cost <= h.cost);
+        }
+    }
+}
+
+#[test]
+fn prefix_k_zero_budget_zero_and_errors() {
+    let trie = words();
+    let cm = CostModel::qwerty();
+    let mut s = Searcher::new();
+    let cfg = SearchConfig {
+        k: 0,
+        ..SearchConfig::default()
+    };
+    assert!(
+        s.search_prefix(&trie, &cm, b"he", &cfg)
+            .unwrap()
+            .hits
+            .is_empty()
+    );
+    // Budget 0: exact prefixes only.
+    let cfg = SearchConfig {
+        budget: 0,
+        ..SearchConfig::default()
+    };
+    let hits = run_prefix(&trie, b"hel", &cfg);
+    assert_eq!(prefix_terms(&trie, &hits), ["help", "hello"]);
+    assert!(run_prefix(&trie, b"hxl", &cfg).is_empty());
+    let long = vec![b'a'; MAX_QUERY_LEN + 1];
+    assert!(matches!(
+        s.search_prefix(&trie, &cm, &long, &SearchConfig::default()),
+        Err(SearchError::QueryTooLong { .. })
+    ));
+    let over = SearchConfig {
+        budget: 65,
+        ..SearchConfig::default()
+    };
+    assert!(matches!(
+        s.search_prefix(&trie, &cm, b"a", &over),
+        Err(SearchError::BudgetTooLarge { .. })
+    ));
+    // The longest accepted query.
+    let long = vec![b'a'; MAX_QUERY_LEN];
+    assert!(
+        s.search_prefix(&trie, &cm, &long, &SearchConfig::default())
+            .is_ok()
+    );
+}
+
+#[test]
+fn prefix_node_limit_truncates_and_keeps_a_correct_head() {
+    let items: Vec<(String, u16)> = (0..500)
+        .map(|i| (format!("word{i:03}"), (i * 7 % 1000) as u16))
+        .collect();
+    let refs: Vec<(&str, u16)> = items.iter().map(|(s, w)| (s.as_str(), *w)).collect();
+    let trie = Trie::build(&refs).unwrap();
+    let cm = CostModel::qwerty();
+    let mut s = Searcher::new();
+    let full = SearchConfig {
+        k: 20,
+        max_nodes: usize::MAX,
+        ..SearchConfig::default()
+    };
+    let want = s.search_prefix(&trie, &cm, b"wprd", &full).unwrap();
+    assert!(!want.stats.truncated);
+    let want: Vec<_> = want.hits.iter().map(|h| (h.id, h.cost)).collect();
+    assert_eq!(want.len(), 20);
+    let cut = SearchConfig {
+        max_nodes: 12,
+        ..full
+    };
+    let out = s.search_prefix(&trie, &cm, b"wprd", &cut).unwrap();
+    assert!(out.stats.truncated);
+    assert!(out.stats.nodes_expanded <= 12);
+    let got: Vec<_> = out.hits.iter().map(|h| (h.id, h.cost)).collect();
+    assert_eq!(got[..], want[..got.len()]);
+}

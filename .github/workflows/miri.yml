@@ -40,6 +40,9 @@ jobs:
       - run: >
           cargo miri test -p keyhammer --
           --skip lower_bound_never_exceeds
+          --skip prefix_bound_never_exceeds
+          --skip prefix_matches_the_oracle
+          --skip prefix_cost_never_exceeds
           --skip matches_the_oracle
           --skip both_rankings
           --skip tsb_and_plain

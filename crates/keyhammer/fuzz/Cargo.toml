@@ -38,3 +38,10 @@ path = "fuzz_targets/tsb_equivalence.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "prefix_oracle_equality"
+path = "fuzz_targets/prefix_oracle_equality.rs"
+test = false
+doc = false
+bench = false
