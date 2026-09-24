@@ -50,3 +50,16 @@ jobs:
           targets: wasm32-unknown-unknown, thumbv7em-none-eabihf
       - run: cargo build -p keyhammer --target wasm32-unknown-unknown --release
       - run: cargo build -p keyhammer --target thumbv7em-none-eabihf
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - run: cargo fmt -p keyhammer-wasm -- --check
+      - run: cargo clippy -p keyhammer-wasm --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo build -p keyhammer-wasm --target wasm32-unknown-unknown --profile wasm
+      - run: node bindings/wasm/test.mjs
