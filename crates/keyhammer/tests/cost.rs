@@ -72,7 +72,9 @@ fn minimum_costs_match_the_spec() {
 fn non_letter_bytes_are_never_adjacent_and_never_panic() {
     let cm = CostModel::qwerty();
     assert_eq!(cm.sub_cost(b'1', b'2', 1), 16);
-    assert_eq!(cm.sub_cost(0xC3, 0xA9, 1), 16);
+    assert_eq!(cm.sub_cost(0xC3_u8, 0xA9_u8, 1), 16);
+    assert_eq!(cm.sub_cost('é', 'e', 1), 16);
+    assert_eq!(cm.sub_cost(0x11_0000_u32, u32::MAX, 0), 24);
     assert_eq!(cm.sub_cost(b' ', b'a', 1), 16);
 }
 

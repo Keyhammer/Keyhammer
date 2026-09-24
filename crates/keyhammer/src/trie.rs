@@ -5,6 +5,10 @@
 //!
 //! Children of a node are contiguous and always have larger indices than the
 //! node, so the structure has no cycles by construction.
+//!
+//! Edges are labelled with symbols: the Unicode scalar values of the terms,
+//! one per `char` (see `docs/design/unicode.md`). For ASCII a symbol is the
+//! byte.
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
@@ -13,7 +17,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
 
-use crate::cost::class;
+use crate::cost::symbol_class;
 
 /// Value of [`Trie::term_id`] for nodes where no term ends.
 pub const NO_TERM: u32 = u32::MAX;
@@ -53,13 +57,39 @@ fn index_u32(i: usize) -> Result<u32, BuildError> {
     }
 }
 
-/// A trie over byte strings with a weight per term.
+/// Edge labels: one byte per node while every label is at most U+00FF (every
+/// ASCII or Latin-1 dictionary), four bytes otherwise.
+#[derive(Clone, Debug)]
+enum Labels {
+    Narrow(Vec<u8>),
+    Wide(Vec<u32>),
+}
+
+impl Labels {
+    #[inline]
+    fn get(&self, v: usize) -> u32 {
+        match self {
+            Labels::Narrow(l) => u32::from(l[v]),
+            Labels::Wide(l) => l[v],
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Labels::Narrow(l) => l.len(),
+            Labels::Wide(l) => l.len(),
+        }
+    }
+}
+
+/// A trie over strings, split into Unicode scalar values, with a weight per
+/// term.
 #[derive(Clone, Debug)]
 pub struct Trie {
     terms: Vec<String>,
     weights: Vec<u16>,
     input_index: Vec<u32>,
-    label: Vec<u8>,
+    label: Labels,
     child_start: Vec<u32>,
     child_count: Vec<u16>,
     term_id: Vec<u32>,
@@ -102,17 +132,28 @@ impl Trie {
         });
         pairs.dedup_by(|cur, prev| cur.0 == prev.0);
 
-        let bytes: Vec<&[u8]> = pairs.iter().map(|p| p.0.as_bytes()).collect();
-        let mut label = vec![0u8];
+        // The terms as symbols, in one buffer: term `i` is
+        // `syms[start[i]..start[i + 1]]`.
+        let mut syms: Vec<u32> = Vec::new();
+        let mut start: Vec<usize> = Vec::with_capacity(pairs.len() + 1);
+        for p in &pairs {
+            start.push(syms.len());
+            syms.extend(p.0.chars().map(u32::from));
+        }
+        start.push(syms.len());
+        let term = |i: usize| &syms[start[i]..start[i + 1]];
+        let wide = syms.iter().any(|&c| c > 0xFF);
+
+        let mut label = vec![0u32];
         let mut child_start = vec![0u32];
         let mut child_count = vec![0u16];
         let mut term_id = vec![NO_TERM];
         let mut depth_of = vec![0u16];
 
         let mut queue: VecDeque<(usize, usize, usize, usize)> = VecDeque::new();
-        queue.push_back((0, 0, bytes.len(), 0));
+        queue.push_back((0, 0, pairs.len(), 0));
         while let Some((node, mut lo, hi, depth)) = queue.pop_front() {
-            if bytes[lo].len() == depth {
+            if term(lo).len() == depth {
                 term_id[node] = index_u32(lo)?;
                 lo += 1;
             }
@@ -120,9 +161,9 @@ impl Trie {
             let mut count = 0u16;
             let mut i = lo;
             while i < hi {
-                let b = bytes[i][depth];
+                let b = term(i)[depth];
                 let mut j = i + 1;
-                while j < hi && bytes[j][depth] == b {
+                while j < hi && term(j)[depth] == b {
                     j += 1;
                 }
                 let child = label.len();
@@ -156,12 +197,17 @@ impl Trie {
                 max_weight[v] = max_weight[v].max(max_weight[c]);
                 len_min[v] = len_min[v].min(len_min[c]);
                 len_max[v] = len_max[v].max(len_max[c]);
-                below_mask[v] |= class(label[c]) | below_mask[c];
+                below_mask[v] |= symbol_class(label[c]) | below_mask[c];
             }
         }
 
         let terms = pairs.iter().map(|p| String::from(p.0)).collect();
         let input_index = pairs.iter().map(|p| p.2).collect();
+        let label = if wide {
+            Labels::Wide(label)
+        } else {
+            Labels::Narrow(label.into_iter().map(|c| c as u8).collect())
+        };
         Ok(Trie {
             terms,
             weights,
@@ -213,7 +259,8 @@ impl Trie {
             .unwrap_or(u32::MAX)
     }
 
-    /// The byte on the edge leading into node `v` (0 for the root).
+    /// The symbol on the edge leading into node `v`, as a `char` (`'\0'` for
+    /// the root).
     ///
     /// # Panics
     ///
@@ -228,9 +275,13 @@ impl Trie {
     /// let trie = Trie::build(&[("car", 9), ("cat", 4)]).unwrap();
     /// // Nodes in breadth-first order: root, c, a, r, t.
     /// assert_eq!(trie.node_count(), 5);
-    /// assert_eq!(trie.label(0), 0);
-    /// assert_eq!(trie.label(1), b'c');
-    /// assert_eq!(trie.label(4), b't');
+    /// assert_eq!(trie.label(0), '\0');
+    /// assert_eq!(trie.label(1), 'c');
+    /// assert_eq!(trie.label(4), 't');
+    /// // One node per code point, not per UTF-8 byte.
+    /// let trie = Trie::build(&[("né", 1)]).unwrap();
+    /// assert_eq!(trie.node_count(), 3);
+    /// assert_eq!(trie.label(2), 'é');
     /// ```
     ///
     /// An index past the last node panics:
@@ -240,8 +291,14 @@ impl Trie {
     /// let trie = Trie::build(&[("a", 1)]).unwrap();
     /// trie.label(trie.node_count());
     /// ```
-    pub fn label(&self, v: usize) -> u8 {
-        self.label[v]
+    pub fn label(&self, v: usize) -> char {
+        char::from_u32(self.label.get(v)).unwrap_or('\0')
+    }
+
+    /// The symbol on the edge into `v` as a `u32` (what the search compares).
+    #[inline]
+    pub(crate) fn symbol(&self, v: usize) -> u32 {
+        self.label.get(v)
     }
 
     /// The node indices of the children of `v`.
@@ -313,7 +370,7 @@ impl Trie {
         self.max_weight[v]
     }
 
-    /// The length of the shortest term at or below `v`.
+    /// The length, in symbols, of the shortest term at or below `v`.
     ///
     /// # Panics
     ///
@@ -333,7 +390,7 @@ impl Trie {
         self.len_min[v]
     }
 
-    /// The length of the longest term at or below `v`.
+    /// The length, in symbols, of the longest term at or below `v`.
     ///
     /// # Panics
     ///
@@ -354,7 +411,8 @@ impl Trie {
         self.len_max[v]
     }
 
-    /// The character classes that appear on edges strictly below `v`.
+    /// The symbol classes ([`symbol_class`]) that appear on edges strictly
+    /// below `v`.
     ///
     /// # Panics
     ///
@@ -365,12 +423,13 @@ impl Trie {
     /// # Examples
     ///
     /// ```
-    /// use keyhammer::cost::class;
+    /// use keyhammer::cost::symbol_class;
     /// use keyhammer::trie::Trie;
     /// let trie = Trie::build(&[("ab", 1)]).unwrap();
     /// let a = trie.children(0).start;
-    /// assert_eq!(trie.below_mask(0), class(b'a') | class(b'b'));
-    /// assert_eq!(trie.below_mask(a), class(b'b')); // not its own edge
+    /// let class = |c: char| symbol_class(c.into());
+    /// assert_eq!(trie.below_mask(0), class('a') | class('b'));
+    /// assert_eq!(trie.below_mask(a), class('b')); // not its own edge
     /// let b = trie.children(a).start;
     /// assert_eq!(trie.below_mask(b), 0);
     /// ```

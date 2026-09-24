@@ -34,7 +34,8 @@ jobs:
       # under Miri they need far more than 45 minutes (a first run of the whole
       # suite timed out) and add nothing for undefined behaviour, since the
       # same code paths run in the other tests (a_term_of_* build 65535-byte
-      # terms, also very slow under Miri). They are skipped by name here
+      # terms, also very slow under Miri; ascii_results_* runs thousands of
+      # searches to pin the ASCII results). They are skipped by name here
       # (no source changes) and still run in the normal `test` job. Locally this
       # takes a few minutes (tests/fuzz_like.rs already scales itself under Miri).
       - run: >
@@ -47,6 +48,7 @@ jobs:
           --skip both_rankings
           --skip tsb_and_plain
           --skip a_term_of_
+          --skip ascii_results_and_work_are_unchanged
       # The C ABI crate holds unsafe code (raw pointers from C); its tests are
       # small, so all of them run.
       - run: cargo miri test -p keyhammer-c

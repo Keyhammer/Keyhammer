@@ -24,16 +24,20 @@
 //!
 //! [`Searcher::search_prefix`] is the autocomplete variant: a term costs what its best prefix
 //! costs. See `docs/design/prefix-mode.md`.
+//!
+//! Queries and terms are compared per Unicode scalar value (a symbol), not per
+//! UTF-8 byte; for ASCII the two are the same. See `docs/design/unicode.md`.
 
 use alloc::collections::BinaryHeap;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt;
 
-use crate::cost::{Cost, CostModel, INF, class, whole_units};
+use crate::cost::{Cost, CostModel, INF, symbol_class, whole_units};
+use crate::text;
 use crate::trie::{NO_TERM, Trie};
 
-/// Longest accepted query, in bytes.
+/// Longest accepted query, in symbols (code points; bytes for ASCII).
 pub const MAX_QUERY_LEN: usize = 128;
 const MAX_W: usize = 8;
 const ROW: usize = 2 * MAX_W + 1;
@@ -182,7 +186,7 @@ pub struct Output {
 pub enum SearchError {
     /// The query is longer than [`MAX_QUERY_LEN`].
     QueryTooLong {
-        /// Query length in bytes.
+        /// Query length in code points.
         len: usize,
         /// The limit.
         max: usize,
@@ -200,7 +204,7 @@ impl fmt::Display for SearchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SearchError::QueryTooLong { len, max } => {
-                write!(f, "query has {len} bytes, the limit is {max}")
+                write!(f, "query has {len} code points, the limit is {max}")
             }
             SearchError::BudgetTooLarge { budget, max } => {
                 write!(f, "budget {budget} exceeds the maximum {max}")
@@ -262,7 +266,7 @@ fn cap(v: Cost, budget: Cost) -> Cost {
     if v > budget { INF } else { v }
 }
 
-fn root_row(q: &[u8], cm: &CostModel, w: usize, budget: Cost) -> [Cost; ROW] {
+fn root_row(q: &[u32], cm: &CostModel, w: usize, budget: Cost) -> [Cost; ROW] {
     let mut row = [INF; ROW];
     row[w] = 0;
     for i in 1..=q.len().min(w) {
@@ -273,13 +277,13 @@ fn root_row(q: &[u8], cm: &CostModel, w: usize, budget: Cost) -> [Cost; ROW] {
 
 #[allow(clippy::too_many_arguments)]
 fn child_row(
-    q: &[u8],
+    q: &[u32],
     cm: &CostModel,
     w: usize,
     budget: Cost,
     depth: usize,
-    parent_label: u8,
-    ch: u8,
+    parent_label: u32,
+    ch: u32,
     cur: &[Cost; ROW],
     prev: &[Cost; ROW],
 ) -> [Cost; ROW] {
@@ -379,7 +383,7 @@ fn lower_bound(
 struct Expander<'a> {
     trie: &'a Trie,
     cm: &'a CostModel,
-    q: &'a [u8],
+    q: &'a [u32],
     qmask: &'a [u64],
     w: usize,
     budget: Cost,
@@ -447,8 +451,8 @@ impl Expander<'_> {
             self.w,
             self.budget,
             depth,
-            self.trie.label(v),
-            self.trie.label(c),
+            self.trie.symbol(v),
+            self.trie.symbol(c),
             cur,
             prev,
         );
@@ -475,6 +479,8 @@ impl Expander<'_> {
 pub struct Searcher {
     heap: BinaryHeap<Entry>,
     qmask: Vec<u64>,
+    /// The query as symbols (see `text::decode`).
+    qsym: Vec<u32>,
     seq: u32,
 }
 
@@ -527,11 +533,12 @@ impl Searcher {
         });
     }
 
-    /// Validates the query and the budget; returns the band half-width.
-    fn check(q: &[u8], cm: &CostModel, cfg: &SearchConfig) -> Result<usize, SearchError> {
-        if q.len() > MAX_QUERY_LEN {
+    /// Validates the query length (in symbols) and the budget; returns the
+    /// band half-width.
+    fn check(len: usize, cm: &CostModel, cfg: &SearchConfig) -> Result<usize, SearchError> {
+        if len > MAX_QUERY_LEN {
             return Err(SearchError::QueryTooLong {
-                len: q.len(),
+                len,
                 max: MAX_QUERY_LEN,
             });
         }
@@ -548,7 +555,10 @@ impl Searcher {
     /// Returns the `cfg.k` best terms within `cfg.budget`, best first, in the
     /// order set by `cfg.ranking`.
     ///
-    /// `q` must already be lowercase; bytes outside `a..=z` are compared verbatim.
+    /// `q` is UTF-8 and is compared per code point with the terms, as it is:
+    /// it must already be in the form the terms are stored in (lowercase for
+    /// a dictionary of lowercase terms). A byte that is not part of valid
+    /// UTF-8 is a symbol of its own that matches no term.
     pub fn search(
         &mut self,
         trie: &Trie,
@@ -556,7 +566,31 @@ impl Searcher {
         q: &[u8],
         cfg: &SearchConfig,
     ) -> Result<Output, SearchError> {
-        let w = Self::check(q, cm, cfg)?;
+        let len = text::decode(q, &mut self.qsym, MAX_QUERY_LEN);
+        self.run(trie, cm, len, cfg)
+    }
+
+    /// Fills the per-query masks from `q` and resets the queue.
+    fn prepare(&mut self, q: &[u32]) {
+        let m = q.len();
+        self.qmask.clear();
+        self.qmask.resize(m + 1, 0);
+        for i in (0..m).rev() {
+            self.qmask[i] = self.qmask[i + 1] | symbol_class(q[i]);
+        }
+        self.heap.clear();
+        self.seq = 0;
+    }
+
+    /// [`Searcher::search`] on the `len` symbols in `self.qsym`.
+    fn run(
+        &mut self,
+        trie: &Trie,
+        cm: &CostModel,
+        len: usize,
+        cfg: &SearchConfig,
+    ) -> Result<Output, SearchError> {
+        let w = Self::check(len, cm, cfg)?;
         let mut out = Output {
             hits: Vec::new(),
             stats: Stats::default(),
@@ -564,17 +598,11 @@ impl Searcher {
         if cfg.k == 0 {
             return Ok(out);
         }
-        let m = q.len();
-        self.qmask.clear();
-        self.qmask.resize(m + 1, 0);
-        for i in (0..m).rev() {
-            self.qmask[i] = self.qmask[i + 1] | class(q[i]);
-        }
-        self.heap.clear();
-        self.seq = 0;
-
         // Moved out for the duration of the search so that the expander can
-        // borrow it while entries are pushed; put back below.
+        // borrow them while entries are pushed; put back below.
+        let qsym = core::mem::take(&mut self.qsym);
+        let q = qsym.as_slice();
+        self.prepare(q);
         let qmask = core::mem::take(&mut self.qmask);
         let ex = Expander {
             trie,
@@ -643,6 +671,7 @@ impl Searcher {
             }
         }
         self.qmask = qmask;
+        self.qsym = qsym;
         out.stats.nodes_pushed = self.seq as usize;
         Ok(out)
     }
@@ -666,7 +695,7 @@ impl Searcher {
     /// tells if it stopped the search, and the hits returned are then still
     /// the first ones of the exact order.
     ///
-    /// `q` must already be lowercase, as for [`Searcher::search`].
+    /// `q` is read as for [`Searcher::search`].
     ///
     /// ```
     /// use keyhammer::cost::CostModel;
@@ -689,7 +718,19 @@ impl Searcher {
         q: &[u8],
         cfg: &SearchConfig,
     ) -> Result<Output, SearchError> {
-        let w = Self::check(q, cm, cfg)?;
+        let len = text::decode(q, &mut self.qsym, MAX_QUERY_LEN);
+        self.run_prefix(trie, cm, len, cfg)
+    }
+
+    /// [`Searcher::search_prefix`] on the `len` symbols in `self.qsym`.
+    fn run_prefix(
+        &mut self,
+        trie: &Trie,
+        cm: &CostModel,
+        len: usize,
+        cfg: &SearchConfig,
+    ) -> Result<Output, SearchError> {
+        let w = Self::check(len, cm, cfg)?;
         let mut out = Output {
             hits: Vec::new(),
             stats: Stats::default(),
@@ -697,15 +738,9 @@ impl Searcher {
         if cfg.k == 0 {
             return Ok(out);
         }
-        let m = q.len();
-        self.qmask.clear();
-        self.qmask.resize(m + 1, 0);
-        for i in (0..m).rev() {
-            self.qmask[i] = self.qmask[i + 1] | class(q[i]);
-        }
-        self.heap.clear();
-        self.seq = 0;
-
+        let qsym = core::mem::take(&mut self.qsym);
+        let q = qsym.as_slice();
+        self.prepare(q);
         let qmask = core::mem::take(&mut self.qmask);
         let ex = Expander {
             trie,
@@ -809,6 +844,7 @@ impl Searcher {
             }
         }
         self.qmask = qmask;
+        self.qsym = qsym;
         out.stats.nodes_pushed = self.seq as usize;
         Ok(out)
     }
@@ -844,13 +880,18 @@ mod tests {
         }
     }
 
+    /// The symbols of a term.
+    fn syms(s: &str) -> Vec<u32> {
+        s.chars().map(u32::from).collect()
+    }
+
     /// Naive full-matrix weighted OSA cost, independent of the banded rows.
     /// `d[j][i]` aligns the term prefix `t[..j]` with the query prefix `q[..i]`.
-    fn oracle(cm: &CostModel, q: &[u8], t: &[u8]) -> u32 {
+    fn oracle(cm: &CostModel, q: &[u32], t: &[u32]) -> u32 {
         oracle_matrix(cm, q, t)[t.len()][q.len()]
     }
 
-    fn oracle_matrix(cm: &CostModel, q: &[u8], t: &[u8]) -> Vec<Vec<u32>> {
+    fn oracle_matrix(cm: &CostModel, q: &[u32], t: &[u32]) -> Vec<Vec<u32>> {
         const BIG: u32 = 1_000_000;
         let (m, n) = (q.len(), t.len());
         let mut d = vec![vec![BIG; m + 1]; n + 1];
@@ -883,13 +924,13 @@ mod tests {
         d
     }
 
-    fn random_word(rng: &mut Rng, alpha: &[u8], max_len: usize) -> Vec<u8> {
+    fn random_word(rng: &mut Rng, alpha: &[u32], max_len: usize) -> Vec<u32> {
         let len = 1 + rng.below(max_len);
         (0..len).map(|_| alpha[rng.below(alpha.len())]).collect()
     }
 
     /// Up to `ops` random substitutions, insertions, deletions and swaps.
-    fn mutate(rng: &mut Rng, word: &[u8], alpha: &[u8], ops: usize) -> Vec<u8> {
+    fn mutate(rng: &mut Rng, word: &[u32], alpha: &[u32], ops: usize) -> Vec<u32> {
         let mut w = word.to_vec();
         for _ in 0..ops {
             let letter = alpha[rng.below(alpha.len())];
@@ -918,9 +959,9 @@ mod tests {
 
     /// A dictionary of 1 to 24 entries of length 1 to 9 with duplicates,
     /// prefix chains and extensions of earlier entries.
-    fn random_dictionary(rng: &mut Rng, alpha: &[u8]) -> Vec<(String, u16)> {
+    fn random_dictionary(rng: &mut Rng, alpha: &[u32]) -> Vec<(String, u16)> {
         let size = 1 + rng.below(24);
-        let mut words: Vec<Vec<u8>> = Vec::new();
+        let mut words: Vec<Vec<u32>> = Vec::new();
         while words.len() < size {
             let w = match (rng.below(6), words.len()) {
                 (0, n) if n > 0 => words[rng.below(n)].clone(),
@@ -949,7 +990,8 @@ mod tests {
                 } else {
                     rng.below(65_536) as u16
                 };
-                (String::from_utf8(w).unwrap_or_default(), weight)
+                let s = w.iter().filter_map(|&c| char::from_u32(c)).collect();
+                (s, weight)
             })
             .collect()
     }
@@ -970,7 +1012,7 @@ mod tests {
     fn check_instance(
         trie: &Trie,
         cm: &CostModel,
-        q: &[u8],
+        q: &[u32],
         budget: Cost,
         tsb: bool,
         cov: &mut Coverage,
@@ -979,7 +1021,7 @@ mod tests {
         let m = q.len();
         let mut qmask = vec![0u64; m + 1];
         for i in (0..m).rev() {
-            qmask[i] = qmask[i + 1] | class(q[i]);
+            qmask[i] = qmask[i + 1] | symbol_class(q[i]);
         }
         let ex = Expander {
             trie,
@@ -997,7 +1039,7 @@ mod tests {
         // cost and the smallest term key at or below it. Children always have
         // larger indices than their parent.
         let costs: Vec<u32> = (0..trie.len() as u32)
-            .map(|id| oracle(cm, q, trie.term(id).as_bytes()))
+            .map(|id| oracle(cm, q, &syms(trie.term(id))))
             .collect();
         let n = trie.node_count();
         let mut best = vec![u32::MAX; n];
@@ -1065,11 +1107,23 @@ mod tests {
         }
     }
 
+    /// The alphabets of the property tests: ASCII ones (in the last, '!' and
+    /// '"' share the classes of 'a' and 'b').
+    const ASCII_ALPHABETS: [&str; 4] = ["aqw", "asdfqwer", "abcdefghijklmnopqrstuvwxyz", "ab!\""];
+
+    /// Non-ASCII alphabets: Latin-1 letters (narrow labels), `à` and `Ć`
+    /// (U+00E0 and U+0106, whose classes collide), letters of other scripts
+    /// and an emoji (wide labels), and ç with its ABNT2 neighbours.
+    const OTHER_ALPHABETS: [&str; 4] = ["aeéèçß", "aàĆc", "жзaЖ😀", "çlp.;"];
+
     fn check_mode(tsb: bool) -> Coverage {
-        // In the last alphabet '!' and '"' share the classes of 'a' and 'b'.
-        let alphabets: [&[u8]; 4] = [b"aqw", b"asdfqwer", b"abcdefghijklmnopqrstuvwxyz", b"ab!\""];
+        check_mode_on(&ASCII_ALPHABETS, tsb)
+    }
+
+    fn check_mode_on(alphabets: &[&str], tsb: bool) -> Coverage {
         let mut cov = Coverage::default();
         for (a, alpha) in alphabets.iter().enumerate() {
+            let alpha = &syms(alpha);
             for d in 0..150 {
                 // Every layout in turn: the bound uses the model's minimum
                 // costs, which must hold for any of them.
@@ -1084,7 +1138,7 @@ mod tests {
                         let len = rng.below(11);
                         (0..len).map(|_| alpha[rng.below(alpha.len())]).collect()
                     } else {
-                        let base = dict[rng.below(dict.len())].0.as_bytes();
+                        let base = &syms(&dict[rng.below(dict.len())].0);
                         let ops = rng.below(4);
                         mutate(&mut rng, base, alpha, ops)
                     };
@@ -1121,8 +1175,16 @@ mod tests {
         assert!(cov.bounded > 10_000 && cov.terminals_within > 1_000);
     }
 
+    #[test]
+    fn lower_bound_never_exceeds_the_oracle_on_non_ascii_alphabets() {
+        for tsb in [false, true] {
+            let cov = check_mode_on(&OTHER_ALPHABETS, tsb);
+            assert!(cov.bounded > 10_000 && cov.terminals_within > 1_000);
+        }
+    }
+
     /// `D[m][j]` for every term prefix length `j` (the last column).
-    fn oracle_col(cm: &CostModel, q: &[u8], t: &[u8]) -> Vec<u32> {
+    fn oracle_col(cm: &CostModel, q: &[u32], t: &[u32]) -> Vec<u32> {
         oracle_matrix(cm, q, t).iter().map(|r| r[q.len()]).collect()
     }
 
@@ -1141,7 +1203,7 @@ mod tests {
     fn check_prefix_instance(
         trie: &Trie,
         cm: &CostModel,
-        q: &[u8],
+        q: &[u32],
         budget: Cost,
         tsb: bool,
         cov: &mut Coverage,
@@ -1150,7 +1212,7 @@ mod tests {
         let m = q.len();
         let mut qmask = vec![0u64; m + 1];
         for i in (0..m).rev() {
-            qmask[i] = qmask[i + 1] | class(q[i]);
+            qmask[i] = qmask[i + 1] | symbol_class(q[i]);
         }
         let ex = Expander {
             trie,
@@ -1163,7 +1225,7 @@ mod tests {
             prefix: true,
         };
         let cols: Vec<Vec<u32>> = (0..trie.len() as u32)
-            .map(|id| oracle_col(cm, q, trie.term(id).as_bytes()))
+            .map(|id| oracle_col(cm, q, &syms(trie.term(id))))
             .collect();
         let pcost: Vec<u32> = cols
             .iter()
@@ -1259,10 +1321,14 @@ mod tests {
     }
 
     fn check_prefix_mode(tsb: bool) -> Coverage {
-        let alphabets: [&[u8]; 4] = [b"aqw", b"asdfqwer", b"abcdefghijklmnopqrstuvwxyz", b"ab!\""];
+        check_prefix_mode_on(&ASCII_ALPHABETS, tsb)
+    }
+
+    fn check_prefix_mode_on(alphabets: &[&str], tsb: bool) -> Coverage {
         let cm = CostModel::qwerty();
         let mut cov = Coverage::default();
         for (a, alpha) in alphabets.iter().enumerate() {
+            let alpha = &syms(alpha);
             for d in 0..150 {
                 let mut rng = Rng::new((a as u64 + 1) * 1000 + d);
                 let dict = random_dictionary(&mut rng, alpha);
@@ -1274,7 +1340,7 @@ mod tests {
                         (0..len).map(|_| alpha[rng.below(alpha.len())]).collect()
                     } else {
                         // A truncated dictionary entry with 0 to 3 edits.
-                        let base = dict[rng.below(dict.len())].0.as_bytes();
+                        let base = &syms(&dict[rng.below(dict.len())].0);
                         let cut = 1 + rng.below(base.len());
                         let ops = rng.below(4);
                         mutate(&mut rng, &base[..cut], alpha, ops)
@@ -1308,5 +1374,13 @@ mod tests {
     fn prefix_bound_never_exceeds_the_oracle_with_tsb() {
         let cov = check_prefix_mode(true);
         assert!(cov.bounded > 10_000 && cov.terminals_within > 1_000 && cov.settled > 1_000);
+    }
+
+    #[test]
+    fn prefix_bound_never_exceeds_the_oracle_on_non_ascii_alphabets() {
+        for tsb in [false, true] {
+            let cov = check_prefix_mode_on(&OTHER_ALPHABETS, tsb);
+            assert!(cov.bounded > 10_000 && cov.terminals_within > 1_000 && cov.settled > 1_000);
+        }
     }
 }

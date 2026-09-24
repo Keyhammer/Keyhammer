@@ -526,3 +526,149 @@ fn prefix_cost_never_exceeds_the_exact_cost() {
         assert!(pre.hits.len() >= ex.hits.len());
     }
 }
+
+// ---- non-ASCII alphabets (issue #19) ----------------------------------------
+
+/// Alphabets of code points: Latin-1 letters (narrow labels); `à` and `Ć`,
+/// whose subtree classes collide; other scripts and an emoji (wide labels);
+/// `ç` with its ABNT2 neighbours; and a mix of precomposed and combining
+/// accents, which the engine compares as they are.
+const TEXT_ALPHABETS: [&str; 5] = ["aeéèçãß", "aàĆc", "жзaЖ😀", "çlp.;", "ae\u{301}éæœ"];
+
+fn text_word(rng: &mut Rng, alpha: &[char]) -> Vec<char> {
+    let len = 1 + rng.below(9) as usize;
+    (0..len)
+        .map(|_| alpha[rng.below(alpha.len() as u64) as usize])
+        .collect()
+}
+
+fn text_mutate(rng: &mut Rng, word: &[char], alpha: &[char], ops: usize) -> Vec<char> {
+    let mut w = word.to_vec();
+    let pick = |rng: &mut Rng| alpha[rng.below(alpha.len() as u64) as usize];
+    for _ in 0..ops {
+        match rng.below(4) {
+            0 if !w.is_empty() => {
+                let i = rng.below(w.len() as u64) as usize;
+                w[i] = pick(rng);
+            }
+            1 => {
+                let i = rng.below(w.len() as u64 + 1) as usize;
+                let c = pick(rng);
+                w.insert(i, c);
+            }
+            2 if w.len() > 1 => {
+                let i = rng.below(w.len() as u64) as usize;
+                w.remove(i);
+            }
+            3 if w.len() > 1 => {
+                let i = rng.below(w.len() as u64 - 1) as usize;
+                w.swap(i, i + 1);
+            }
+            _ => {}
+        }
+    }
+    w
+}
+
+/// Exact and prefix search against the brute-force oracle over code points,
+/// on a dictionary built with `Trie::build` (no normalisation).
+fn check_text(layout: Layout, seed: u64, alpha: &str, dict_size: usize) {
+    let alpha: Vec<char> = alpha.chars().collect();
+    let mut rng = Rng::new(seed);
+    let words: Vec<String> = (0..dict_size)
+        .map(|_| text_word(&mut rng, &alpha).into_iter().collect())
+        .collect();
+    let items: Vec<(&str, u16)> = words
+        .iter()
+        .map(|w| (w.as_str(), rng.below(4) as u16 * 100))
+        .collect();
+    let trie = Trie::build(&items).unwrap();
+    let cm = CostModel::for_layout(layout);
+    let mut searcher = Searcher::new();
+    for _ in 0..30 {
+        let q: String = if rng.below(5) == 0 {
+            text_word(&mut rng, &alpha).into_iter().collect()
+        } else {
+            let base: Vec<char> = words[rng.below(dict_size as u64) as usize]
+                .chars()
+                .collect();
+            let cut = 1 + rng.below(base.len() as u64) as usize;
+            let base = if rng.below(2) == 0 {
+                &base[..]
+            } else {
+                &base[..cut]
+            };
+            let ops = rng.below(4) as usize;
+            text_mutate(&mut rng, base, &alpha, ops)
+                .into_iter()
+                .collect()
+        };
+        let q = q.as_bytes();
+        for (k, budget) in [(1usize, 16u16), (5, 32), (20, 24), (3, 7), (10, 64)] {
+            for tsb in [false, true] {
+                for ranking in [Ranking::Coarse, Ranking::Exact] {
+                    let cfg = SearchConfig {
+                        k,
+                        budget,
+                        tsb,
+                        ranking,
+                        ..SearchConfig::default()
+                    };
+                    let hits = |out: keyhammer::search::Output| -> Vec<(u32, u16)> {
+                        out.hits.iter().map(|h| (h.id, h.cost)).collect()
+                    };
+                    let got = hits(searcher.search(&trie, &cm, q, &cfg).unwrap());
+                    let want = oracle_topk(&trie, &cm, q, budget, k, ranking);
+                    let ctx = format!(
+                        "layout={} seed={seed} q={:?} k={k} budget={budget} tsb={tsb} {ranking:?}",
+                        layout.name(),
+                        String::from_utf8_lossy(q)
+                    );
+                    assert_eq!(got, want, "exact {ctx}");
+                    let got = hits(searcher.search_prefix(&trie, &cm, q, &cfg).unwrap());
+                    let want = oracle_topk_prefix(&trie, &cm, q, budget, k, ranking);
+                    assert_eq!(got, want, "prefix {ctx}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn text_matches_the_oracle_on_non_ascii_alphabets() {
+    for (a, alpha) in TEXT_ALPHABETS.iter().enumerate() {
+        for seed in 0..4 {
+            let layout = Layout::ALL[(a + seed as usize) % Layout::ALL.len()];
+            check_text(layout, 900 + 10 * a as u64 + seed, alpha, 150);
+        }
+    }
+}
+
+/// A multi-byte character is one symbol: one substitution, not two edits,
+/// and a query as long as the limit in code points is accepted even if it
+/// is longer in bytes.
+#[test]
+fn a_code_point_is_one_symbol() {
+    let trie = Trie::build(&[("café", 1), ("cafe", 1), ("жук", 1)]).unwrap();
+    let cm = CostModel::qwerty();
+    let mut s = Searcher::new();
+    let cfg = SearchConfig {
+        k: 5,
+        ranking: Ranking::Exact,
+        ..SearchConfig::default()
+    };
+    let out = s.search(&trie, &cm, "cafe".as_bytes(), &cfg).unwrap();
+    let got: Vec<(&str, u16)> = out.hits.iter().map(|h| (trie.term(h.id), h.cost)).collect();
+    assert_eq!(got, [("cafe", 0), ("café", 16)]);
+    let out = s.search(&trie, &cm, "жек".as_bytes(), &cfg).unwrap();
+    assert_eq!(out.hits.len(), 1);
+    assert_eq!((trie.term(out.hits[0].id), out.hits[0].cost), ("жук", 16));
+    // 128 two-byte characters: 256 bytes, 128 code points.
+    let long = "é".repeat(128);
+    assert!(s.search(&trie, &cm, long.as_bytes(), &cfg).is_ok());
+    let longer = "é".repeat(129);
+    assert_eq!(
+        s.search(&trie, &cm, longer.as_bytes(), &cfg).unwrap_err(),
+        keyhammer::search::SearchError::QueryTooLong { len: 129, max: 128 }
+    );
+}

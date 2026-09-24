@@ -31,14 +31,48 @@ pub fn whole_units(cost: Cost) -> Cost {
 /// still fits in a `u16`.
 pub const INF: Cost = 30_000;
 
-/// Bit that represents the character class of `b` (used by subtree signatures).
+/// Bit that represents the character class of symbol `s` (used by subtree
+/// signatures). Symbols are Unicode scalar values (see `docs/design/unicode.md`).
 ///
-/// Only the low six bits of `b` count, so bytes that agree modulo 64 share a
-/// class: `b'a'` (97) and `b'!'` (33), for instance. Only the letters a-z are guaranteed distinct from one another;
-/// other bytes can share a class with them (digits with p-y, for instance). The
-/// collisions are harmless: the
-/// signatures only bound the search, and a collision can make a bound weaker
-/// (a class looks present when it is not), never wrong.
+/// - ASCII (`s < 128`): bit `s & 63`, so ASCII characters that agree modulo 64
+///   share a class (`a` (97) and `!` (33), for instance, or digits and `p`-`y`).
+///   The letters `a`-`z` take the classes 33 to 58 and are distinct from one
+///   another.
+/// - Everything else: one of the 38 classes the letters `a`-`z` never use (0 to
+///   32 and 59 to 63), chosen by `s % 38`, so that an accented letter or a
+///   letter of another script never hides a missing `a`-`z` letter.
+///
+/// The collisions are harmless: the signatures only bound the search, and a
+/// collision can make a bound weaker (a class looks present when it is not),
+/// never wrong. The proof needs only that equal symbols have equal classes.
+///
+/// # Examples
+///
+/// ```
+/// use keyhammer::cost::symbol_class;
+///
+/// assert_ne!(symbol_class('a'.into()), symbol_class('b'.into()));
+/// assert_eq!(symbol_class('a'.into()), symbol_class('!'.into())); // 97 and 33, modulo 64
+/// // No non-ASCII symbol shares a class with a letter a-z.
+/// let letters = ('a'..='z').fold(0, |m, c| m | symbol_class(c.into()));
+/// assert_eq!(symbol_class('é'.into()) & letters, 0);
+/// ```
+#[inline]
+pub fn symbol_class(s: u32) -> u64 {
+    /// The classes that no letter `a`-`z` uses.
+    const FREE: [u8; 38] = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+        25, 26, 27, 28, 29, 30, 31, 32, 59, 60, 61, 62, 63,
+    ];
+    if s < 128 {
+        1u64 << (s & 63)
+    } else {
+        1u64 << FREE[(s % 38) as usize]
+    }
+}
+
+/// The class of the byte `b` read as the code point U+0000 to U+00FF: the same
+/// as [`symbol_class`]`(b.into())`. For ASCII that is bit `b & 63`.
 ///
 /// # Examples
 ///
@@ -50,7 +84,7 @@ pub const INF: Cost = 30_000;
 /// ```
 #[inline]
 pub fn class(b: u8) -> u64 {
-    1u64 << (b & 63)
+    symbol_class(u32::from(b))
 }
 
 /// One row of a keyboard [`Layout`]: the keys left to right and where the
@@ -375,14 +409,18 @@ impl CostModel {
     }
 
     #[inline]
-    fn is_adjacent(&self, a: u8, b: u8) -> bool {
-        let (ia, ib) = (a.wrapping_sub(b'a'), b.wrapping_sub(b'a'));
+    fn is_adjacent(&self, a: u32, b: u32) -> bool {
+        let (ia, ib) = (a.wrapping_sub(0x61), b.wrapping_sub(0x61));
         ia < 26 && ib < 26 && self.adjacent[ia as usize] & (1u32 << ib) != 0
     }
 
     /// Cost of typing `q` where the term has `t`; `qpos` is the index of `q` in the query.
+    ///
+    /// Symbols are Unicode scalar values: a `u8` is read as U+0000 to U+00FF,
+    /// a `char` or a `u32` as itself.
     #[inline]
-    pub fn sub_cost(&self, q: u8, t: u8, qpos: usize) -> Cost {
+    pub fn sub_cost<S: Into<u32>>(&self, q: S, t: S, qpos: usize) -> Cost {
+        let (q, t) = (q.into(), t.into());
         if q == t {
             return 0;
         }
@@ -394,9 +432,9 @@ impl CostModel {
         at_start(base, qpos)
     }
 
-    /// Cost of deleting the query byte at `qpos` (the user typed an extra byte).
+    /// Cost of deleting the query symbol at `qpos` (the user typed an extra one).
     #[inline]
-    pub fn del_cost(&self, q: &[u8], qpos: usize) -> Cost {
+    pub fn del_cost<S: PartialEq>(&self, q: &[S], qpos: usize) -> Cost {
         let doubled =
             qpos > 0 && matches!((q.get(qpos), q.get(qpos - 1)), (Some(a), Some(b)) if a == b);
         at_start(
@@ -409,9 +447,9 @@ impl CostModel {
         )
     }
 
-    /// Cost of inserting term byte `t` (the user skipped it) when `qpos` query bytes are consumed.
+    /// Cost of inserting term symbol `t` (the user skipped it) when `qpos` query symbols are consumed.
     #[inline]
-    pub fn ins_cost(&self, t: u8, prev_t: Option<u8>, qpos: usize) -> Cost {
+    pub fn ins_cost<S: PartialEq>(&self, t: S, prev_t: Option<S>, qpos: usize) -> Cost {
         let base = if prev_t == Some(t) {
             self.indel_double
         } else {
@@ -420,7 +458,7 @@ impl CostModel {
         at_start(base, qpos)
     }
 
-    /// Cost of swapping two adjacent bytes, the first at `qpos` in the query.
+    /// Cost of swapping two adjacent symbols, the first at `qpos` in the query.
     #[inline]
     pub fn transpose_cost(&self, qpos: usize) -> Cost {
         at_start(self.transpose, qpos)

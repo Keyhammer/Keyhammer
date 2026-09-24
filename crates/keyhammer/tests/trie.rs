@@ -24,8 +24,8 @@ fn structure_has_shared_prefixes() {
     let t = sample();
     // root, c, d, ca, do, car, cat, dog, cart
     assert_eq!(t.node_count(), 9);
-    let labels: Vec<u8> = t.children(0).map(|c| t.label(c)).collect();
-    assert_eq!(labels, [b'c', b'd']);
+    let labels: Vec<char> = t.children(0).map(|c| t.label(c)).collect();
+    assert_eq!(labels, ['c', 'd']);
 }
 
 #[test]

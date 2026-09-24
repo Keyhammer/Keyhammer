@@ -350,10 +350,43 @@ pub fn utf16_range(s: &str, range: Range<usize>) -> Option<Range<usize>> {
     Some(utf16_offset(s, range.start)?..utf16_offset(s, range.end)?)
 }
 
+/// First symbol used for bytes that are not valid UTF-8: byte `b` becomes
+/// `INVALID_BYTE + b`, above every scalar value, so it equals no trie label.
+pub(crate) const INVALID_BYTE: u32 = 0x11_0000;
+
+/// Clears `out` and decodes `bytes` into symbols: the code points of the valid
+/// UTF-8 sequences and `INVALID_BYTE + b` for every other byte `b`. At most
+/// `max + 1` symbols are stored; the return value is the total number of
+/// symbols, stored or not.
+pub(crate) fn decode(bytes: &[u8], out: &mut Vec<u32>, max: usize) -> usize {
+    out.clear();
+    let cap = max.saturating_add(1);
+    if bytes.is_ascii() {
+        out.extend(bytes.iter().take(cap).map(|&b| u32::from(b)));
+        return bytes.len();
+    }
+    let mut n = 0usize;
+    let mut push = |s: u32| {
+        if n < cap {
+            out.push(s);
+        }
+        n += 1;
+    };
+    for chunk in bytes.utf8_chunks() {
+        chunk.valid().chars().for_each(|c| push(u32::from(c)));
+        chunk
+            .invalid()
+            .iter()
+            .for_each(|&b| push(INVALID_BYTE + u32::from(b)));
+    }
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alloc::string::ToString;
+    use alloc::vec;
 
     const MODES: [Normalizer; 4] = [
         Normalizer::new(),
@@ -585,5 +618,33 @@ mod tests {
             assert_eq!(utf8_offset(s, cp), Some(prefix.len()));
             assert_eq!(utf16_offset(s, cp), Some(prefix.encode_utf16().count()));
         }
+    }
+
+    #[test]
+    fn decoding_maps_invalid_bytes_above_every_scalar_value() {
+        let mut out = vec![7];
+        assert_eq!(decode(b"abc", &mut out, 10), 3);
+        assert_eq!(out, [97, 98, 99]);
+        assert_eq!(decode("é€".as_bytes(), &mut out, 10), 2);
+        assert_eq!(out, [0xE9, 0x20AC]);
+        // A lone continuation byte and a truncated sequence.
+        assert_eq!(decode(b"a\x80b\xE2\x82", &mut out, 10), 5);
+        assert_eq!(
+            out,
+            [
+                97,
+                INVALID_BYTE + 0x80,
+                98,
+                INVALID_BYTE + 0xE2,
+                INVALID_BYTE + 0x82
+            ]
+        );
+        // Counting goes on past the cap, storing stops at max + 1.
+        assert_eq!(decode(b"abcdef", &mut out, 2), 6);
+        assert_eq!(out, [97, 98, 99]);
+        assert_eq!(decode("ééééé".as_bytes(), &mut out, 2), 5);
+        assert_eq!(out.len(), 3);
+        assert_eq!(decode(b"", &mut out, 0), 0);
+        assert!(out.is_empty());
     }
 }
