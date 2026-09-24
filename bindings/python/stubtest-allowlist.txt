@@ -1,0 +1,2 @@
+# The compiled module has no __all__; the public one is in keyhammer/__init__.py.
+keyhammer._keyhammer.__all__

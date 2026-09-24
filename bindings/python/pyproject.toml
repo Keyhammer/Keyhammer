@@ -1,0 +1,27 @@
+[build-system]
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
+
+[project]
+name = "keyhammer"
+version = "0.1.0"
+description = "Typo-tolerant top-k search with keyboard-aware edit costs (prototype)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/Keyhammer/Keyhammer"
+
+[tool.maturin]
+python-source = "python"
+module-name = "keyhammer._keyhammer"
+features = ["pyo3/extension-module"]
