@@ -74,6 +74,12 @@ allows about two edits. Set `tsb: true` in `SearchConfig` to enable the subtree
 signature bound; it prunes work without changing the results (see
 [How it works](/docs/how-it-works)).
 
+For higher recall at a latency cost, `SearchConfig::high_recall()` is the default
+with a budget of 48. In the repository's benchmark (300 typo pairs, one machine,
+one run) it found the right word more often but expanded about 4.6-5.2 times the
+nodes and had about 5.5-7.3 times the p95 latency; measure it on your own
+dictionary. The largest accepted budget is 64.
+
 ## Where to go next
 
 - [How it works](/docs/how-it-works): the data structure and the search.

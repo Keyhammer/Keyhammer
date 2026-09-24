@@ -401,3 +401,38 @@ fn first_byte_units_depend_on_the_kind_of_edit() {
         );
     }
 }
+
+#[test]
+fn the_high_recall_preset_is_the_default_with_budget_48() {
+    let d = SearchConfig::default();
+    let p = SearchConfig::high_recall();
+    assert_eq!(d.budget, 32, "the default budget must stay 32");
+    assert_eq!(p.budget, 48);
+    assert_eq!(
+        (p.k, p.tsb, p.max_nodes, p.ranking),
+        (d.k, d.tsb, d.max_nodes, d.ranking)
+    );
+}
+
+#[test]
+fn the_budget_limit_stays_64_and_the_preset_is_below_it() {
+    let trie = words();
+    let cm = CostModel::qwerty();
+    let with = |budget| SearchConfig {
+        budget,
+        ..SearchConfig::default()
+    };
+    let mut s = Searcher::new();
+    assert!(
+        s.search(&trie, &cm, b"a", &SearchConfig::high_recall())
+            .is_ok()
+    );
+    assert!(s.search(&trie, &cm, b"a", &with(64)).is_ok());
+    assert_eq!(
+        s.search(&trie, &cm, b"a", &with(65)).unwrap_err(),
+        SearchError::BudgetTooLarge {
+            budget: 65,
+            max: 64
+        }
+    );
+}

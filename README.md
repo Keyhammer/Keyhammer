@@ -80,6 +80,13 @@ assert_eq!(best.cost, 16);
 
 The same example runs as a doc test in `crates/keyhammer/src/lib.rs`.
 
+The default budget is 32 (about two edits). For higher recall at a latency cost
+use `SearchConfig::high_recall()` (budget 48). On the benchmark data it found the
+right word more often but expanded about 4.6-5.2x the nodes and had about
+5.5-7.3x the p95 latency; one corpus, one machine, see
+[`docs/benchmarks/recall-preset.md`](docs/benchmarks/recall-preset.md). Budgets
+above 64 are rejected.
+
 ## Results so far
 
 Rust-only, one machine, one run, 300 typo pairs (Birkbeck corpus), one English

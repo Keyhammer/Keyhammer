@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `SearchConfig::high_recall()`: an opt-in preset with `budget = 48`; the
+  default budget stays 32. On the benchmark data it found the right word more
+  often but expanded about 4.6-5.2x the nodes and had about 5.5-7.3x the p95
+  latency; see `docs/benchmarks/recall-preset.md`. The M0 harness reports the
+  preset too.
 - New `keyhammer` core crate (M0 prototype): keyboard-weighted cost model, flat
   trie, exact best-first search, and brute-force oracle tests.
 - CI workflow for the core crate.
