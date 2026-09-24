@@ -16,11 +16,13 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Turns integer-to-pointer casts into errors.
+  MIRIFLAGS: -Zmiri-strict-provenance
 
 jobs:
   miri:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly

@@ -30,6 +30,8 @@ would require a separate agreement, for example a contributor license agreement 
 - Other CI gates: `cargo deny check` (config in `deny.toml`; only licences
   compatible with AGPL-3.0-or-later), and a size gate that fails when the
   gzipped `.wasm` exceeds 20 KB (`WASM_GZIP_BUDGET` in `.github/workflows/ci.yml`;
-  raise it only in a pull request that explains why). A weekly workflow runs
+  raise it only in a pull request that explains why). The advisory database
+  is fetched fresh, so a new advisory can make `cargo deny` fail on an unrelated
+  pull request; that is expected, handle it in its own change. A weekly workflow runs
   `cargo miri test -p keyhammer`.
 - The core crate forbids `unsafe` and must stay free of runtime dependencies.

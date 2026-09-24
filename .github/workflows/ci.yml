@@ -78,13 +78,17 @@ jobs:
           WASM_GZIP_BUDGET: "20480"
         run: |
           f=target/wasm32-unknown-unknown/wasm/keyhammer_wasm.wasm
-          size=$(gzip -9 -c "$f" | wc -c)
+          size=$(gzip -9 -n -c "$f" | wc -c)
           echo "gzipped wasm: $size bytes (budget $WASM_GZIP_BUDGET)"
           echo "gzipped wasm: $size bytes (budget $WASM_GZIP_BUDGET)" >> "$GITHUB_STEP_SUMMARY"
-          test "$size" -le "$WASM_GZIP_BUDGET"
+          if [ "$size" -gt "$WASM_GZIP_BUDGET" ]; then
+            echo "::error::gzipped wasm $size B exceeds budget $WASM_GZIP_BUDGET B; shrink it or raise WASM_GZIP_BUDGET in a PR that says why"
+            exit 1
+          fi
 
   deny:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       # Pinned to a commit (the v2.1.1 tag), verified with `gh api`.

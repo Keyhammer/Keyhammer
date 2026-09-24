@@ -1,10 +1,15 @@
 # cargo-deny configuration (https://embarkstudios.github.io/cargo-deny/).
 # Run: cargo deny check
 #
-# Scope: the main workspace (Cargo.lock at the repository root). The two
-# manifests excluded from it, crates/node and bench/competitors, have their own
-# lockfiles and are not checked here; bench/competitors pulls third-party
-# search crates only for comparison and is never shipped.
+# Scope: the main workspace only (Cargo.lock at the repository root). These
+# manifests are excluded from it, have their own lockfiles and are NOT covered
+# by this check:
+#   - crates/keyhammer/fuzz: cargo-fuzz harness, built only by the fuzz workflow.
+#   - crates/node: the Node.js binding, its own workspace.
+#   - bench/competitors: pulls third-party search crates only for comparison and
+#     is never shipped.
+# Their dependencies are not vetted here and the allow list below is not widened
+# for them.
 
 [graph]
 all-features = true
@@ -19,8 +24,10 @@ allow = [
     "Unicode-3.0",
 ]
 confidence-threshold = 0.9
-# Today only the workspace crates themselves are in the graph; the permissive
-# licences are kept so that future dependencies with them do not need a change.
+# Cargo.lock lists 72 packages, but the check reports only the 4 AGPL crates
+# (the workspace's own) plus the licences of the permitted dev-dependencies. The
+# permissive licences below are allowed so that a new dependency using one does
+# not need a config change; do not add others without a licence review.
 unused-allowed-license = "allow"
 
 [advisories]
