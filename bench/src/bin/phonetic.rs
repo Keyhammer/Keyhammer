@@ -607,8 +607,62 @@ fn concat(a: Row, b: Row) -> Row {
     }
 }
 
+struct Diag {
+    def_rr: f64,
+    ph_rr: f64,
+    nhits: usize,
+    seen: bool, // the right word is the right word of some training pair
+}
+
 struct Fold {
     rows: Vec<Row>, // default, hr48, hw, learned, phonetic
+    diag: Vec<Diag>,
+}
+
+/// Where the phonetic gain comes from: by the engine's hit count and by the rank of the right word.
+fn print_diag(d: &[Diag]) {
+    let n = d.len() as f64;
+    let cnt = |f: &dyn Fn(&Diag) -> bool| d.iter().filter(|x| f(x)).count();
+    println!(
+        "Diagnostic (n = {}): the default returns 0 hits for {} queries and fewer than 5 for {}; the right word is the right word of a training pair for {} ({} pairs are split by pair, not by intended word).
+",
+        d.len(),
+        cnt(&|x| x.nhits == 0),
+        cnt(&|x| x.nhits < 5),
+        cnt(&|x| x.seen),
+        d.len()
+    );
+    println!(
+        "| phonetic rank of the right word | queries gained | share of the MRR gain (sum / n) |
+|---|---|---|"
+    );
+    for (lab, lo, hi) in [
+        ("1", 1.0, 1.0),
+        ("2 to 5", 0.2, 0.5),
+        ("6 to 10", 0.1, 0.1667),
+    ] {
+        let g: Vec<f64> = d
+            .iter()
+            .filter(|x| x.ph_rr > x.def_rr && x.ph_rr >= lo - 1e-9 && x.ph_rr <= hi + 1e-9)
+            .map(|x| x.ph_rr - x.def_rr)
+            .collect();
+        println!(
+            "| {lab} | {} | {:+.4} |",
+            g.len(),
+            g.iter().sum::<f64>() / n
+        );
+    }
+    let l: Vec<f64> = d
+        .iter()
+        .filter(|x| x.ph_rr < x.def_rr)
+        .map(|x| x.ph_rr - x.def_rr)
+        .collect();
+    println!(
+        "| queries that got worse | {} | {:+.4} |
+",
+        l.len(),
+        l.iter().sum::<f64>() / n
+    );
 }
 
 /// Select on `train`, score on `test`; both index `c` (same corpus) or `train_c` / `test_c`.
@@ -660,7 +714,19 @@ fn run_fold(
         .iter()
         .map(|&i| rr_of(&phon_ids(&test_c.qs[i], ph), test_c.qs[i].right))
         .collect();
+    let trained: HashSet<u32> = train.iter().map(|&i| train_c.qs[i].right).collect();
+    let diag: Vec<Diag> = test
+        .iter()
+        .zip(p_rr.iter().zip(d_rr.iter()))
+        .map(|(&i, (&p, &d))| Diag {
+            def_rr: d,
+            ph_rr: p,
+            nhits: test_c.qs[i].base32.len().min(10),
+            seen: trained.contains(&test_c.qs[i].right),
+        })
+        .collect();
     Fold {
+        diag,
         rows: vec![
             mk("default (budget 32)", d_rr, d_n.clone()),
             mk("preset (budget 48)", h_rr, h_n),
@@ -871,7 +937,8 @@ fn main() {
             println!("{l}\n");
         }
         let mut it = folds.into_iter();
-        let (f0, f1) = (it.next().unwrap(), it.next().unwrap());
+        let (mut f0, mut f1) = (it.next().unwrap(), it.next().unwrap());
+        let diag: Vec<Diag> = f0.diag.drain(..).chain(f1.diag.drain(..)).collect();
         let rows: Vec<Row> = f0
             .rows
             .into_iter()
@@ -881,6 +948,7 @@ fn main() {
         println!("Pooled test scores over all {} pairs:\n", c.qs.len());
         print_rows(&rows);
         println!();
+        print_diag(&diag);
     }
 
     println!(
@@ -890,7 +958,6 @@ fn main() {
     for (trc, trp) in train_sets {
         let idx: Vec<usize> = (0..trc.qs.len()).collect();
         let tp: Vec<&(String, String)> = trp.iter().collect();
-        let mut log = Vec::new();
         // selection is done once per test corpus only to reuse run_fold; the selection is identical
         let mut first = true;
         for tec in [&c_bb300, &c_bb, &c_wiki, &c_gtc] {
@@ -901,14 +968,14 @@ fn main() {
             let mut l2 = Vec::new();
             let f = run_fold(&mut cache, trc, &idx, &tp, tec, &te, &mut l2);
             if first {
-                log = l2;
                 first = false;
                 println!("### trained on {}\n", trc.name);
-                println!("{}\n", log[0]);
+                println!("{}\n", l2[0]);
             }
             println!("Test corpus: {} (n = {})\n", tec.name, tec.qs.len());
             print_rows(&f.rows);
             println!();
+            print_diag(&f.diag);
         }
     }
 }

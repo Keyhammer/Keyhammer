@@ -107,7 +107,6 @@ fn main() {
                 max_nodes: 1_000_000_000,
                 ranking: Ranking::Exact,
                 tsb: true,
-                ..SearchConfig::default()
             };
             let cost: Vec<Option<u16>> = c
                 .pairs
