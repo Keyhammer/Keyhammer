@@ -43,14 +43,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "keyhammer"
+name = "keyhammer-legacy"
 version = "0.1.0"
 
 [[package]]
 name = "keyhammer-node"
 version = "0.1.0"
 dependencies = [
- "keyhammer",
+ "keyhammer-legacy",
  "napi",
  "napi-build",
  "napi-derive",
@@ -87,9 +87,9 @@ dependencies = [
 
 [[package]]
 name = "napi-build"
-version = "2.3.1"
+version = "2.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d376940fd5b723c6893cd1ee3f33abbfd86acb1cd1ec079f3ab04a2a3bc4d3b1"
+checksum = "9befcb51d87271051c0c11aaf625d09340266b7f1ac3fef5975e62274dc2813f"
 
 [[package]]
 name = "napi-derive"
