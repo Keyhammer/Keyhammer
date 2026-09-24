@@ -7,7 +7,7 @@
       - any-glob-to-any-file: ["legacy/**"]
 "area: node":
   - changed-files:
-      - any-glob-to-any-file: ["crates/node/**"]
+      - any-glob-to-any-file: ["bindings/node/**"]
 "area: bench":
   - changed-files:
       - any-glob-to-any-file: ["bench/**"]

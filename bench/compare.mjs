@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Robson Trasel
 // JS comparison harness reproducing the original spike on real typos (Birkbeck corpus):
-// legacy binding vs Fuse, uFuzzy, fuzzysort, MiniSearch and a plain edit-distance baseline.
-import { createRequire } from "module";
+// the Node package (bindings/node, new engine) vs Fuse, uFuzzy, fuzzysort, MiniSearch and a plain edit-distance baseline.
 import fs from "fs";
-const require = createRequire(import.meta.url);
-const { KeyhammerIndex } = require("../crates/node/keyhammer.node");
+import { Index } from "../bindings/node/index.js";
 import Fuse from "fuse.js";
 import uFuzzy from "@leeoniya/ufuzzy";
 import fuzzysort from "fuzzysort";
@@ -88,9 +86,9 @@ const engines = {
   dl: dlEngine(false),
   dlfreq: dlEngine(true),
   keyhammer(dict) {
-    const idx = KeyhammerIndex.build(dict, 2);
-    idx.search("warmup", 1);
-    return (q) => idx.search(q, 10).map((r) => r.term);
+    const idx = Index.build(dict);
+    idx.search("warmup", { k: 1 });
+    return (q) => idx.search(q, { k: 10 }).hits.map((h) => h.term);
   },
   fuse(dict) {
     const f = new Fuse(dict, { threshold: 0.4, ignoreLocation: true, includeScore: false });

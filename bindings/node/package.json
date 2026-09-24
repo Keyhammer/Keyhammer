@@ -1,0 +1,30 @@
+{
+  "name": "keyhammer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Keyboard-aware fuzzy word lookup: Node.js package over the Keyhammer WebAssembly build (unpublished prototype)",
+  "license": "AGPL-3.0-or-later",
+  "repository": "github:Keyhammer/Keyhammer",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "keyhammer.wasm"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "test": "node --test test/index.test.mjs"
+  }
+}

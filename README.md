@@ -115,7 +115,9 @@ previous ordering by exact cost the gain is significant (+0.015, +0.028 and
 
 - `crates/keyhammer`: the core crate.
 - `legacy/`: the previous engine, kept only as a benchmark reference.
-- `crates/node`: Node.js binding of the legacy engine, used by the JS comparison.
+- `bindings/wasm`: the core as a WebAssembly module with a small C-ABI (the demo page).
+- `bindings/node`: the Node.js package, JavaScript over that module; see
+  [`docs/design/node-binding.md`](docs/design/node-binding.md).
 - `bench/`: data preparation, the Rust harnesses and the JS comparisons.
 - `docs/`: benchmark reports and prior-art notes.
 - `docs/design/`: written proofs, currently the lower bound of the search.
@@ -141,20 +143,17 @@ Competitive benchmarks: [`docs/benchmarks/competitors.md`](docs/benchmarks/compe
 [`docs/benchmarks/competitors-js.md`](docs/benchmarks/competitors-js.md) (the WebAssembly build
 against JavaScript libraries, harness in `bench/js-competitors`).
 
-The old JS comparison of the legacy binding (`node compare.mjs` in `bench/`) needs the legacy Node binding
-built first. It loads `crates/node/keyhammer.node`:
-
-```bash
-cd crates/node && npm install && npx napi build --release --platform
-# copy the produced .node file to crates/node/keyhammer.node
-```
+The old JS spike comparison (`node compare.mjs` in `bench/`, after `npm install` and
+`node fetch-data.mjs`) loads the Node package, so build its module first with
+`cd bindings/node && npm run build:wasm`. It now runs the new engine (it used to run the
+legacy one), so its numbers are not comparable with earlier runs of that script.
 
 ## Roadmap
 
 - Improve ranking quality against the baseline.
 - Unicode support and more keyboard layouts.
 - Index serialization.
-- Language bindings for the new engine.
+- More language bindings for the new engine (Node.js exists: `bindings/node`).
 
 ## Contributing
 

@@ -5,7 +5,6 @@
 # manifests are excluded from it, have their own lockfiles and are NOT covered
 # by this check:
 #   - crates/keyhammer/fuzz: cargo-fuzz harness, built only by the fuzz workflow.
-#   - crates/node: the Node.js binding, its own workspace.
 #   - bench/competitors: pulls third-party search crates only for comparison and
 #     is never shipped.
 # Their dependencies are not vetted here and the allow list below is not widened
