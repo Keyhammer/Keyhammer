@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Robson Trasel
 #![allow(dead_code)]
 
-use keyhammer::cost::{Cost, CostModel};
+use keyhammer::cost::{Cost, CostModel, edit_count};
+use keyhammer::search::Ranking;
 use keyhammer::trie::Trie;
 
 /// Small deterministic xorshift generator (no dependencies).
@@ -60,24 +61,33 @@ pub fn oracle_cost(cm: &CostModel, q: &[u8], t: &[u8]) -> u32 {
     d[n][m]
 }
 
-/// Exact top-k by brute force: (id, cost) ordered by (cost, 65535 - weight, id).
+/// Exact top-k by brute force: (id, true cost) ordered by
+/// (rank cost, 65535 - weight, id), where the rank cost is the edit count of
+/// the cost for [`Ranking::Edits`] and the cost itself for [`Ranking::Cost`].
 pub fn oracle_topk(
     trie: &Trie,
     cm: &CostModel,
     q: &[u8],
     budget: Cost,
     k: usize,
+    ranking: Ranking,
 ) -> Vec<(u32, Cost)> {
-    let mut all: Vec<(u32, u32, u32)> = Vec::new();
+    let mut all: Vec<(Cost, u32, u32, Cost)> = Vec::new();
     for id in 0..trie.len() as u32 {
         let c = oracle_cost(cm, q, trie.term(id).as_bytes());
         if c <= u32::from(budget) {
-            all.push((c, 65_535 - u32::from(trie.weight(id)), id));
+            let c = c as Cost;
+            let rank_cost = match ranking {
+                Ranking::Edits => edit_count(c),
+                Ranking::Cost => c,
+                _ => unreachable!("unknown ranking"),
+            };
+            all.push((rank_cost, 65_535 - u32::from(trie.weight(id)), id, c));
         }
     }
     all.sort();
     all.into_iter()
         .take(k)
-        .map(|(c, _, id)| (id, c as Cost))
+        .map(|(_, _, id, c)| (id, c))
         .collect()
 }

@@ -6,7 +6,7 @@
 mod support;
 
 use keyhammer::cost::CostModel;
-use keyhammer::search::{SearchConfig, Searcher};
+use keyhammer::search::{Ranking, SearchConfig, Searcher};
 use keyhammer::trie::Trie;
 use support::{Rng, oracle_topk};
 
@@ -41,7 +41,7 @@ fn mutate(rng: &mut Rng, word: &[u8], alpha: u64, ops: usize) -> Vec<u8> {
     w
 }
 
-fn check(seed: u64, alpha: u64, dict_size: usize, tsb: bool) {
+fn check(seed: u64, alpha: u64, dict_size: usize, tsb: bool, ranking: Ranking) {
     let mut rng = Rng::new(seed);
     let words: Vec<Vec<u8>> = (0..dict_size)
         .map(|_| random_word(&mut rng, alpha))
@@ -82,6 +82,7 @@ fn check(seed: u64, alpha: u64, dict_size: usize, tsb: bool) {
                 k,
                 budget,
                 tsb,
+                ranking,
                 ..SearchConfig::default()
             };
             let got: Vec<(u32, u16)> = searcher
@@ -91,11 +92,11 @@ fn check(seed: u64, alpha: u64, dict_size: usize, tsb: bool) {
                 .iter()
                 .map(|h| (h.id, h.cost))
                 .collect();
-            let want = oracle_topk(&trie, &cm, &q, budget, k);
+            let want = oracle_topk(&trie, &cm, &q, budget, k, ranking);
             assert_eq!(
                 got,
                 want,
-                "seed={seed} alpha={alpha} q={:?} k={k} budget={budget}",
+                "seed={seed} alpha={alpha} q={:?} k={k} budget={budget} tsb={tsb} ranking={ranking:?}",
                 String::from_utf8_lossy(&q)
             );
         }
@@ -105,21 +106,30 @@ fn check(seed: u64, alpha: u64, dict_size: usize, tsb: bool) {
 #[test]
 fn matches_the_oracle_on_tiny_alphabets() {
     for seed in 0..25 {
-        check(seed, 3, 120, false);
+        check(seed, 3, 120, false, Ranking::Edits);
+        if seed % 2 == 0 {
+            check(seed, 3, 120, false, Ranking::Cost);
+        }
     }
 }
 
 #[test]
 fn matches_the_oracle_on_medium_alphabets() {
     for seed in 100..120 {
-        check(seed, 8, 300, false);
+        check(seed, 8, 300, false, Ranking::Edits);
+        if seed % 2 == 0 {
+            check(seed, 8, 300, false, Ranking::Cost);
+        }
     }
 }
 
 #[test]
 fn matches_the_oracle_on_the_full_alphabet() {
     for seed in 200..210 {
-        check(seed, 26, 400, false);
+        check(seed, 26, 400, false, Ranking::Edits);
+        if seed % 2 == 0 {
+            check(seed, 26, 400, false, Ranking::Cost);
+        }
     }
 }
 
@@ -148,21 +158,30 @@ fn known_typos_rank_the_intended_word_first() {
 #[test]
 fn tsb_matches_the_oracle_on_tiny_alphabets() {
     for seed in 300..325 {
-        check(seed, 3, 120, true);
+        check(seed, 3, 120, true, Ranking::Edits);
+        if seed % 2 == 0 {
+            check(seed, 3, 120, true, Ranking::Cost);
+        }
     }
 }
 
 #[test]
 fn tsb_matches_the_oracle_on_medium_alphabets() {
     for seed in 400..420 {
-        check(seed, 8, 300, true);
+        check(seed, 8, 300, true, Ranking::Edits);
+        if seed % 2 == 0 {
+            check(seed, 8, 300, true, Ranking::Cost);
+        }
     }
 }
 
 #[test]
 fn tsb_matches_the_oracle_on_the_full_alphabet() {
     for seed in 500..510 {
-        check(seed, 26, 400, true);
+        check(seed, 26, 400, true, Ranking::Edits);
+        if seed % 2 == 0 {
+            check(seed, 26, 400, true, Ranking::Cost);
+        }
     }
 }
 
