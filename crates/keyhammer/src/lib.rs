@@ -8,6 +8,33 @@
 //! no runtime dependencies.
 //!
 //! Status: M0 prototype. Queries and terms are raw bytes, already lowercased.
+//!
+//! # Example
+//!
+//! ```
+//! use keyhammer::cost::CostModel;
+//! use keyhammer::search::{SearchConfig, Searcher};
+//! use keyhammer::trie::Trie;
+//!
+//! let trie = Trie::build(&[
+//!     ("javascript", 10),
+//!     ("typescript", 10),
+//!     ("python", 10),
+//!     ("rust", 10),
+//!     ("java", 10),
+//! ])
+//! .unwrap();
+//! let costs = CostModel::qwerty();
+//! let mut searcher = Searcher::new();
+//!
+//! // "javasript" skips the 'c' of "javascript".
+//! let out = searcher
+//!     .search(&trie, &costs, b"javasript", &SearchConfig::default())
+//!     .unwrap();
+//! let best = &out.hits[0];
+//! assert_eq!(trie.term(best.id), "javascript");
+//! assert_eq!(best.cost, 16);
+//! ```
 
 #![no_std]
 
