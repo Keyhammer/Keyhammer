@@ -12,7 +12,9 @@ const apiHref = `pathname://${baseUrl}api/keyhammer/index.html`;
 const config = {
   title: 'Keyhammer',
   tagline: 'Typo-tolerant top-k search over a compact trie, with keyboard-aware edit costs',
-  favicon: 'img/favicon.svg',
+  favicon: 'logo/favicon.ico',
+  // The logo lives in /assets/logo (single source, also used by the README) and is served from the site root.
+  staticDirectories: ['static', '../assets'],
   url: 'https://keyhammer.github.io',
   baseUrl,
   organizationName: 'Keyhammer',
@@ -43,8 +45,10 @@ const config = {
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
       colorMode: { respectPrefersColorScheme: true },
+      image: 'logo/social-preview.png',
       navbar: {
         title: 'Keyhammer',
+        logo: { alt: 'Keyhammer logo', src: 'logo/keyhammer-icon.svg', srcDark: 'logo/keyhammer-icon-dark.svg', height: 32 },
         items: [
           { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs' },
           { href: apiHref, label: 'API reference', position: 'left' },

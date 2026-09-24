@@ -3,6 +3,11 @@
   text-align: center;
 }
 
+.logo {
+  display: block;
+  margin: 0 auto 1rem;
+}
+
 .buttons {
   display: flex;
   flex-wrap: wrap;

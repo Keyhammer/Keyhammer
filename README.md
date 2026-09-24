@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/keyhammer-icon-dark.svg">
+    <img src="assets/logo/keyhammer-icon.svg" alt="Keyhammer logo" width="120">
+  </picture>
+</p>
+
 # Keyhammer
 
 Typo-tolerant top-k search over a compact trie, with keyboard-aware edit costs.

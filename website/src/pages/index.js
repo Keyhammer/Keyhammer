@@ -2,6 +2,8 @@ import React from 'react';
 import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
 import Heading from '@theme/Heading';
+import ThemedImage from '@theme/ThemedImage';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 import styles from './index.module.css';
 
 const features = [
@@ -20,12 +22,21 @@ const features = [
 ];
 
 export default function Home() {
+  const logoLight = useBaseUrl('/logo/keyhammer-icon.svg');
+  const logoDark = useBaseUrl('/logo/keyhammer-icon-dark.svg');
   return (
     <Layout
       title="Keyhammer"
       description="Typo-tolerant top-k search over a compact trie, with keyboard-aware edit costs (unpublished prototype).">
       <header className={styles.hero}>
         <div className="container">
+          <ThemedImage
+            alt="Keyhammer logo"
+            className={styles.logo}
+            sources={{ light: logoLight, dark: logoDark }}
+            width={112}
+            height={112}
+          />
           <Heading as="h1" className="hero__title">
             Keyhammer
           </Heading>
