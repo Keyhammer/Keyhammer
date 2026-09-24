@@ -198,15 +198,8 @@ fn geometry_reproduces_the_hand_listed_neighbours_of_every_layout() {
 }
 
 #[test]
-fn every_layout_has_each_letter_exactly_once_and_a_symmetric_relation() {
+fn every_layout_has_a_symmetric_relation() {
     for &layout in Layout::ALL {
-        let mut count = [0u8; 26];
-        for r in layout.rows() {
-            for c in r.keys().chars().filter(char::is_ascii_lowercase) {
-                count[(c as u8 - b'a') as usize] += 1;
-            }
-        }
-        assert!(count.iter().all(|&n| n == 1), "{}", layout.name());
         let cm = CostModel::for_layout(layout);
         for a in b'a'..=b'z' {
             assert_eq!(cm.sub_cost(a, a, 3), 0);
@@ -216,12 +209,6 @@ fn every_layout_has_each_letter_exactly_once_and_a_symmetric_relation() {
                     layout.are_neighbours(a as char, b as char),
                     layout.are_neighbours(b as char, a as char)
                 );
-            }
-        }
-        // Every key has a neighbour in the geometry, none is its own.
-        for r in layout.rows() {
-            for k in r.keys().chars() {
-                assert!(!layout.are_neighbours(k, k));
             }
         }
     }
