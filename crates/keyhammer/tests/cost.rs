@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Robson Trasel
 //! Tests for the fixed-point cost model.
 
-use keyhammer::cost::{COST_UNIT, CostModel, class, edit_count};
+use keyhammer::cost::{COST_UNIT, CostModel, class, whole_units};
 
 #[test]
 fn equal_bytes_cost_nothing() {
@@ -87,9 +87,9 @@ fn class_maps_each_lowercase_letter_to_its_own_bit() {
 }
 
 #[test]
-fn edit_count_rounds_up_to_whole_edits() {
+fn whole_units_rounds_up_to_whole_units_of_16() {
     assert_eq!(COST_UNIT, 16);
-    for (cost, edits) in [
+    for (cost, units) in [
         (0, 0),
         (1, 1),
         (8, 1),
@@ -100,6 +100,6 @@ fn edit_count_rounds_up_to_whole_edits() {
         (32, 2),
         (33, 3),
     ] {
-        assert_eq!(edit_count(cost), edits, "cost={cost}");
+        assert_eq!(whole_units(cost), units, "cost={cost}");
     }
 }

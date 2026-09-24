@@ -106,9 +106,9 @@ fn check(seed: u64, alpha: u64, dict_size: usize, tsb: bool, ranking: Ranking) {
 #[test]
 fn matches_the_oracle_on_tiny_alphabets() {
     for seed in 0..25 {
-        check(seed, 3, 120, false, Ranking::Edits);
+        check(seed, 3, 120, false, Ranking::Coarse);
         if seed % 2 == 0 {
-            check(seed, 3, 120, false, Ranking::Cost);
+            check(seed, 3, 120, false, Ranking::Exact);
         }
     }
 }
@@ -116,9 +116,9 @@ fn matches_the_oracle_on_tiny_alphabets() {
 #[test]
 fn matches_the_oracle_on_medium_alphabets() {
     for seed in 100..120 {
-        check(seed, 8, 300, false, Ranking::Edits);
+        check(seed, 8, 300, false, Ranking::Coarse);
         if seed % 2 == 0 {
-            check(seed, 8, 300, false, Ranking::Cost);
+            check(seed, 8, 300, false, Ranking::Exact);
         }
     }
 }
@@ -126,9 +126,9 @@ fn matches_the_oracle_on_medium_alphabets() {
 #[test]
 fn matches_the_oracle_on_the_full_alphabet() {
     for seed in 200..210 {
-        check(seed, 26, 400, false, Ranking::Edits);
+        check(seed, 26, 400, false, Ranking::Coarse);
         if seed % 2 == 0 {
-            check(seed, 26, 400, false, Ranking::Cost);
+            check(seed, 26, 400, false, Ranking::Exact);
         }
     }
 }
@@ -158,9 +158,9 @@ fn known_typos_rank_the_intended_word_first() {
 #[test]
 fn tsb_matches_the_oracle_on_tiny_alphabets() {
     for seed in 300..325 {
-        check(seed, 3, 120, true, Ranking::Edits);
+        check(seed, 3, 120, true, Ranking::Coarse);
         if seed % 2 == 0 {
-            check(seed, 3, 120, true, Ranking::Cost);
+            check(seed, 3, 120, true, Ranking::Exact);
         }
     }
 }
@@ -168,9 +168,9 @@ fn tsb_matches_the_oracle_on_tiny_alphabets() {
 #[test]
 fn tsb_matches_the_oracle_on_medium_alphabets() {
     for seed in 400..420 {
-        check(seed, 8, 300, true, Ranking::Edits);
+        check(seed, 8, 300, true, Ranking::Coarse);
         if seed % 2 == 0 {
-            check(seed, 8, 300, true, Ranking::Cost);
+            check(seed, 8, 300, true, Ranking::Exact);
         }
     }
 }
@@ -178,9 +178,9 @@ fn tsb_matches_the_oracle_on_medium_alphabets() {
 #[test]
 fn tsb_matches_the_oracle_on_the_full_alphabet() {
     for seed in 500..510 {
-        check(seed, 26, 400, true, Ranking::Edits);
+        check(seed, 26, 400, true, Ranking::Coarse);
         if seed % 2 == 0 {
-            check(seed, 26, 400, true, Ranking::Cost);
+            check(seed, 26, 400, true, Ranking::Exact);
         }
     }
 }
@@ -231,4 +231,48 @@ fn tsb_and_plain_bound_return_identical_hits_and_tsb_never_pushes_more_in_total(
         pushed_tsb <= pushed_plain,
         "tsb pushed {pushed_tsb}, plain pushed {pushed_plain}"
     );
+}
+
+#[test]
+fn both_rankings_return_the_same_candidate_set() {
+    let cm = CostModel::qwerty();
+    let mut s = Searcher::new();
+    for seed in 600..610 {
+        let mut rng = Rng::new(seed);
+        let alpha = [3, 8, 26][seed as usize % 3];
+        let strings: Vec<String> = (0..200)
+            .map(|_| String::from_utf8(random_word(&mut rng, alpha)).unwrap())
+            .collect();
+        let items: Vec<(&str, u16)> = strings
+            .iter()
+            .map(|w| (w.as_str(), rng.below(65_536) as u16))
+            .collect();
+        let trie = Trie::build(&items).unwrap();
+        for _ in 0..20 {
+            let q = random_word(&mut rng, alpha);
+            let mut sets = Vec::new();
+            for ranking in [Ranking::Coarse, Ranking::Exact] {
+                let cfg = SearchConfig {
+                    k: trie.len() + 1,
+                    ranking,
+                    ..SearchConfig::default()
+                };
+                let mut hits: Vec<(u32, u16)> = s
+                    .search(&trie, &cm, &q, &cfg)
+                    .unwrap()
+                    .hits
+                    .iter()
+                    .map(|h| (h.id, h.cost))
+                    .collect();
+                hits.sort_unstable();
+                sets.push(hits);
+            }
+            assert_eq!(
+                sets[0],
+                sets[1],
+                "seed={seed} q={:?}",
+                String::from_utf8_lossy(&q)
+            );
+        }
+    }
 }

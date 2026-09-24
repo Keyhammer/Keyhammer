@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Robson Trasel
 #![allow(dead_code)]
 
-use keyhammer::cost::{Cost, CostModel, edit_count};
+use keyhammer::cost::{Cost, CostModel, whole_units};
 use keyhammer::search::Ranking;
 use keyhammer::trie::Trie;
 
@@ -62,8 +62,9 @@ pub fn oracle_cost(cm: &CostModel, q: &[u8], t: &[u8]) -> u32 {
 }
 
 /// Exact top-k by brute force: (id, true cost) ordered by
-/// (rank cost, 65535 - weight, id), where the rank cost is the edit count of
-/// the cost for [`Ranking::Edits`] and the cost itself for [`Ranking::Cost`].
+/// (rank cost, 65535 - weight, id), where the rank cost is the cost rounded
+/// up to whole units of 16 for [`Ranking::Coarse`] and the cost itself for
+/// [`Ranking::Exact`].
 pub fn oracle_topk(
     trie: &Trie,
     cm: &CostModel,
@@ -78,8 +79,8 @@ pub fn oracle_topk(
         if c <= u32::from(budget) {
             let c = c as Cost;
             let rank_cost = match ranking {
-                Ranking::Edits => edit_count(c),
-                Ranking::Cost => c,
+                Ranking::Coarse => whole_units(c),
+                Ranking::Exact => c,
                 _ => unreachable!("unknown ranking"),
             };
             all.push((rank_cost, 65_535 - u32::from(trie.weight(id)), id, c));

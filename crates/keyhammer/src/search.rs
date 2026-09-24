@@ -11,19 +11,20 @@
 //!
 //! The budget, the band and the candidates always use the weighted costs of
 //! [`CostModel`]. The order of the results is set by [`Ranking`]: by default
-//! ([`Ranking::Edits`]) terms are ranked by their edit count
-//! ([`edit_count`] of the weighted cost), then by higher weight, then by
-//! lower term id, so the weight decides between terms that need the same
-//! number of edits. [`Ranking::Cost`] ranks by the exact weighted cost
-//! instead, then weight, then id. In both modes [`Hit::cost`] is the exact
-//! weighted cost.
+//! ([`Ranking::Coarse`]) terms are ranked by the weighted cost rounded up to
+//! whole units of 16 ([`whole_units`]), then by higher weight, then by lower
+//! term id, so the weight decides between terms whose costs round to the same
+//! number of units. This is not a count of edits: an edit on the first byte
+//! counts as two units and two cheap edits (8 + 8) count as one.
+//! [`Ranking::Exact`] ranks by the exact weighted cost instead, then weight,
+//! then id. In both modes [`Hit::cost`] is the exact weighted cost.
 
 use alloc::collections::BinaryHeap;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt;
 
-use crate::cost::{Cost, CostModel, INF, class, edit_count};
+use crate::cost::{Cost, CostModel, INF, class, whole_units};
 use crate::trie::{NO_TERM, Trie};
 
 /// Longest accepted query, in bytes.
@@ -35,13 +36,15 @@ const ROW: usize = 2 * MAX_W + 1;
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Ranking {
-    /// By [`edit_count`] of the weighted cost, then higher weight, then lower
-    /// term id. Terms that need the same number of edits are ordered by
-    /// weight.
+    /// By the weighted cost rounded up to whole units of 16
+    /// ([`whole_units`]), then higher weight, then lower term id. Terms whose
+    /// costs round to the same number of units are ordered by weight. This is
+    /// not a count of edits: any edit on the first byte (24 or more) counts as
+    /// two units, and two cheap edits (8 + 8) count as one.
     #[default]
-    Edits,
+    Coarse,
     /// By the exact weighted cost, then higher weight, then lower term id.
-    Cost,
+    Exact,
 }
 
 impl Ranking {
@@ -49,8 +52,8 @@ impl Ranking {
     #[inline]
     fn rank(self, cost: Cost) -> Cost {
         match self {
-            Ranking::Edits => edit_count(cost),
-            Ranking::Cost => cost,
+            Ranking::Coarse => whole_units(cost),
+            Ranking::Exact => cost,
         }
     }
 }
@@ -58,8 +61,8 @@ impl Ranking {
 /// Search parameters.
 ///
 /// Build it with `..SearchConfig::default()` so that new fields keep their
-/// defaults: `k = 10`, `budget = 32` (two edits), `tsb = false`,
-/// `max_nodes = 100_000`, `ranking = Ranking::Edits`.
+/// defaults: `k = 10`, `budget = 32` (two ordinary edits' worth of cost), `tsb = false`,
+/// `max_nodes = 100_000`, `ranking = Ranking::Coarse`.
 #[derive(Clone, Debug)]
 pub struct SearchConfig {
     /// Number of results wanted.
@@ -81,7 +84,7 @@ impl Default for SearchConfig {
             budget: 32,
             tsb: false,
             max_nodes: 100_000,
-            ranking: Ranking::Edits,
+            ranking: Ranking::Coarse,
         }
     }
 }
@@ -317,6 +320,9 @@ impl Searcher {
         Self::default()
     }
 
+    // Seven arguments since terminal entries carry their exact cost; a
+    // parameter struct would add more code than it removes, so the lint is
+    // allowed here.
     #[allow(clippy::too_many_arguments)]
     fn push(
         &mut self,
