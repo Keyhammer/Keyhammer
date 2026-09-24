@@ -3,8 +3,6 @@
 .idea/
 node_modules/
 *.node
-bench-vs-fuse/node_modules/
-bench-vs-fuse/package-lock.json
 crates/node/package-lock.json
 crates/node/Cargo.lock
 crates/node/index.d.ts
