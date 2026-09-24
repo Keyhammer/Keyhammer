@@ -312,6 +312,13 @@ const dict = new Set(fs.readFileSync(dictPath, "utf8").split("\n").map((l) => l.
 const AZ = /^[a-z]+$/;
 const ok = (t, c) => AZ.test(t) && AZ.test(c) && t !== c && dict.has(c) && !dict.has(t) && c.length >= 3 && t.length >= 2;
 
+// Expected SHA-256 of the samples (as recorded in docs/benchmarks/competitors.md).
+// They also depend on words-full.tsv; a mismatch means the inputs differ.
+const EXPECTED = {
+  gtc: "091dfd81ef0f13b901bfec40dc1617b74867832b3b3efec35a3cb831378c04e2",
+  wiki: "d3dc05e3a52b1a2c5c06bac4bbfcaafdbfffbe3a501bcd95d457819008b9c3f9",
+};
+
 function sample(pairs, name) {
   const keys = [...new Set(pairs.map(([t, c]) => `${t}\t${c}`))].sort();
   s = SEED;
@@ -320,6 +327,9 @@ function sample(pairs, name) {
   fs.writeFileSync(path.join(OUT, `${name}.tsv`), text);
   const sha = crypto.createHash("sha256").update(text).digest("hex");
   console.log(`${name}.tsv: ${picked.length} pairs from ${keys.length} unique usable pairs (sha256 ${sha})`);
+  if (sha !== EXPECTED[name]) {
+    throw new Error(`${name}.tsv does not match the published sample: sha256 ${sha}, expected ${EXPECTED[name]} (is words-full.tsv from prepare-m0-data.mjs?)`);
+  }
 }
 
 fs.mkdirSync(OUT, { recursive: true });

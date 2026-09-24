@@ -104,9 +104,12 @@ fn parse_args() -> Result<Option<Args>, String> {
         }
     }
     a.corpus_dir = corpus_dir.unwrap_or_else(|| a.data.clone());
-    for e in &a.engines {
+    for (i, e) in a.engines.iter().enumerate() {
         if !engines::ALL.contains(&e.as_str()) {
             return Err(format!("unknown engine {e}"));
+        }
+        if a.engines[..i].contains(e) {
+            return Err(format!("engine {e} listed twice"));
         }
     }
     for c in &a.corpora {
@@ -123,20 +126,42 @@ fn parse_args() -> Result<Option<Args>, String> {
 fn read_pairs(path: &Path) -> Result<Vec<(String, String)>, String> {
     let text =
         fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    Ok(text
-        .lines()
-        .filter_map(|l| {
-            let mut f = l.split('\t');
-            Some((f.next()?.to_string(), f.next()?.to_string()))
-        })
-        .collect())
+    let mut out = Vec::new();
+    let mut bad = 0usize;
+    for l in text.lines().filter(|l| !l.trim().is_empty()) {
+        match l.split_once('\t') {
+            Some((a, b)) => out.push((
+                a.to_string(),
+                b.split('\t').next().unwrap_or("").to_string(),
+            )),
+            None => bad += 1,
+        }
+    }
+    if bad > 0 {
+        return Err(format!(
+            "{}: {bad} non-empty lines without a tab",
+            path.display()
+        ));
+    }
+    Ok(out)
 }
 
 fn read_dict(path: &Path) -> Result<Vec<(String, u16)>, String> {
-    Ok(read_pairs(path)?
-        .into_iter()
-        .map(|(w, f)| (w.to_lowercase(), f.parse().unwrap_or(0)))
-        .collect())
+    let mut out = Vec::new();
+    let mut bad = 0usize;
+    for (w, f) in read_pairs(path)? {
+        match f.trim().parse() {
+            Ok(v) => out.push((w.to_lowercase(), v)),
+            Err(_) => bad += 1,
+        }
+    }
+    if bad > 0 {
+        return Err(format!(
+            "{}: {bad} lines whose weight is not an integer in 0..=65535",
+            path.display()
+        ));
+    }
+    Ok(out)
 }
 
 fn corpus_path(a: &Args, name: &str) -> PathBuf {
@@ -334,19 +359,20 @@ fn run_quality(a: &Args, size: &str, words: &[(String, u16)]) -> Result<(), Stri
         );
         let mut results = Vec::new();
         for b in &mut built {
-            let before = b.engine.failures();
+            let (e0, t0) = (b.engine.errors(), b.engine.truncated());
             let q = quality(b.engine.as_mut(), &pairs);
-            results.push((b.name.clone(), q, b.engine.failures() - before));
+            let counts = (b.engine.errors() - e0, b.engine.truncated() - t0);
+            results.push((b.name.clone(), q, counts));
         }
         let brute = results.iter().position(|r| r.0 == "strsim");
         println!(
-            "| Engine | MRR@10 | R@1 | R@10 | top-10 overlap with strsim | identical top-10 lists | failures |"
+            "| Engine | MRR@10 | R@1 | R@10 | top-10 overlap with strsim | identical top-10 lists | errors | truncated |"
         );
-        println!("|---|---|---|---|---|---|---|");
-        for (name, q, fail) in &results {
+        println!("|---|---|---|---|---|---|---|---|");
+        for (name, q, (err, trunc)) in &results {
             let (ov, same) = brute.map_or((f64::NAN, 0), |i| overlap(&q.tops, &results[i].1.tops));
             println!(
-                "| {name} | {:.3} | {:.3} | {:.3} | {:.3} | {} / {} | {fail} |",
+                "| {name} | {:.3} | {:.3} | {:.3} | {:.3} | {} / {} | {err} | {trunc} |",
                 mean(&q.rr),
                 q.r1,
                 q.r10,
@@ -412,7 +438,14 @@ fn run_latency(a: &Args, size: &str, words: &[(String, u16)]) -> Result<(), Stri
     for corpus in &a.corpora {
         let pairs = usable(&read_pairs(&corpus_path(a, corpus))?, &dict);
         let queries: Vec<String> = pairs.into_iter().map(|(t, _)| t).collect();
-        let reps = a.min_queries.div_ceil(queries.len().max(1)).max(1);
+        if queries.is_empty() {
+            println!(
+                "
+### Latency {size} / {corpus}: no usable pairs, skipped"
+            );
+            continue;
+        }
+        let reps = a.min_queries.div_ceil(queries.len()).max(1);
         println!(
             "\n### Latency {size} / {corpus}: {} queries x {reps} = {} timed per run, {} runs\n",
             queries.len(),

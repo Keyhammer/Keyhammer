@@ -36,8 +36,13 @@ pub trait Engine {
     fn run(&mut self, query: &str);
     /// The ranked terms of the last query (at most [`TOP`]).
     fn top(&self) -> Vec<&str>;
-    /// Queries the engine could not answer (for example a size limit hit).
-    fn failures(&self) -> usize {
+    /// Queries that returned an error (scored as an empty result).
+    fn errors(&self) -> usize {
+        0
+    }
+    /// Queries whose search stopped early at a work limit (keyhammer only:
+    /// `max_nodes`); their result may be incomplete.
+    fn truncated(&self) -> usize {
         0
     }
 }
@@ -58,6 +63,7 @@ pub struct Keyhammer {
     cfg: SearchConfig,
     hits: Vec<u32>,
     truncated: usize,
+    errors: usize,
 }
 
 impl Keyhammer {
@@ -78,6 +84,7 @@ impl Keyhammer {
             },
             hits: Vec::with_capacity(TOP),
             truncated: 0,
+            errors: 0,
         }
     }
 }
@@ -85,18 +92,24 @@ impl Keyhammer {
 impl Engine for Keyhammer {
     fn run(&mut self, query: &str) {
         self.hits.clear();
-        if let Ok(out) = self
+        match self
             .searcher
             .search(&self.trie, &self.costs, query.as_bytes(), &self.cfg)
         {
-            self.truncated += usize::from(out.stats.truncated);
-            self.hits.extend(out.hits.iter().map(|h| h.id));
+            Ok(out) => {
+                self.truncated += usize::from(out.stats.truncated);
+                self.hits.extend(out.hits.iter().map(|h| h.id));
+            }
+            Err(_) => self.errors += 1,
         }
     }
     fn top(&self) -> Vec<&str> {
         self.hits.iter().map(|&id| self.trie.term(id)).collect()
     }
-    fn failures(&self) -> usize {
+    fn errors(&self) -> usize {
+        self.errors
+    }
+    fn truncated(&self) -> usize {
         self.truncated
     }
 }
@@ -180,6 +193,11 @@ impl Fst {
     pub fn build(words: &[(String, u16)]) -> Self {
         let mut sorted: Vec<(&str, u16)> = words.iter().map(|(w, f)| (w.as_str(), *f)).collect();
         sorted.sort_unstable();
+        // Duplicate terms would be handled differently by the engines: this
+        // keeps the lowest weight, SymSpell sums the counts, keyhammer keeps
+        // the highest weight, the brute force and the BK-tree keep both. The
+        // dictionaries used here have no
+        // duplicates, so the difference is latent.
         sorted.dedup_by(|a, b| a.0 == b.0);
         let mut b = MapBuilder::memory();
         for (w, f) in &sorted {
@@ -225,7 +243,7 @@ impl Engine for Fst {
             .map(|(_, _, k)| std::str::from_utf8(k).unwrap_or(""))
             .collect()
     }
-    fn failures(&self) -> usize {
+    fn errors(&self) -> usize {
         self.too_many_states
     }
 }

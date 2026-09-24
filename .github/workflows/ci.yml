@@ -69,3 +69,11 @@ jobs:
           remap="$remap --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
           RUSTFLAGS="$remap" cargo build -p keyhammer-wasm --target wasm32-unknown-unknown --profile wasm
       - run: node bindings/wasm/test.mjs
+
+  bench-competitors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      # Stand-alone crate outside the workspace, with its own lockfile.
+      - run: cargo check --locked --manifest-path bench/competitors/Cargo.toml
