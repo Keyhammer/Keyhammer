@@ -19,3 +19,8 @@ All notable changes to this project are documented here. The format follows
   "chore: relicense to AGPL-3.0-or-later". Versions obtained before that commit
   remain under MIT for those who received them.
 - Current engine moved to `legacy/` and kept only as a benchmark reference.
+- Default ranking is now edit count (the weighted cost rounded up to whole
+  edits), then higher weight, then term id (`Ranking::Edits`, set through the
+  new `SearchConfig::ranking` field). `Ranking::Cost` restores the previous
+  order by exact weighted cost. `Hit::cost` is the exact weighted cost in both
+  modes.

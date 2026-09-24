@@ -8,9 +8,10 @@ License: [AGPL-3.0-or-later](LICENSE)
 ## Status
 
 Early prototype. Nothing is published to crates.io or npm, and the API is
-unstable. The new engine is much faster than the previous one, but its ranking
-quality is currently below a simple "edit distance plus frequency" baseline.
-See [`docs/benchmarks/m0.md`](docs/benchmarks/m0.md).
+unstable. The new engine is much faster than the previous one. Its ranking
+quality is on par with a simple "edit distance plus frequency" baseline within
+measurement noise on the benchmark corpus (300 typo pairs, provisional costs),
+not a measurable gain. See [`docs/benchmarks/m0.md`](docs/benchmarks/m0.md).
 
 ## What it is
 
@@ -27,6 +28,10 @@ dependencies. Queries and terms are lowercased bytes for now.
   band around the diagonal.
 - The search is exact best-first top-k: nodes are expanded in order of their
   lower bound, and an oracle test checks the results against brute force.
+- Results are ranked by edit count (the weighted cost rounded up to whole
+  edits), then by higher frequency weight, then by term id. The weighted costs
+  still set the budget and the candidates. `Ranking::Cost` ranks by the exact
+  weighted cost instead.
 - An optional subtree signature bound (each node keeps the length range and a
   letter mask of the terms below it) prunes subtrees that cannot improve the
   result. On the benchmark data it expands about a third fewer nodes with the
@@ -66,18 +71,20 @@ The same example runs as a doc test in `crates/keyhammer/src/lib.rs`.
 
 Rust-only, one machine, one run, 300 typo pairs (Birkbeck corpus), one English
 dictionary, provisional costs. Full dictionary of 274137 words; the baseline is
-"unit edit distance <= 2, then higher weight". Full report and caveats:
+"unit edit distance <= 2, then higher weight". Full report and caveats (see the
+addendum for the current ranking):
 [`docs/benchmarks/m0.md`](docs/benchmarks/m0.md).
 
 | Engine | MRR | p95 latency (us) |
 |---|---|---|
-| legacy (previous engine) | 0.255 | 44691.7 |
-| baseline | 0.433 | 79726.6 |
-| new+tsb | 0.389 | 363.2 |
+| legacy (previous engine) | 0.255 | 44721.1 |
+| baseline | 0.433 | 83123.8 |
+| new+tsb | 0.429 | 390.3 |
 
-The p95 of the previous engine is 123.0x that of the new one. The new engine's
-MRR is lower than the baseline's at every dictionary size tested (10000,
-100000 and 274137 words).
+The p95 of the previous engine is 114.6x that of the new one. The new engine's
+MRR minus the baseline's is +0.008, -0.004 and -0.004 at 10000, 100000 and
+274137 words: never more than 0.005 below it. With 300 queries one query moves
+MRR by up to 0.0033, so this is parity within measurement noise, not a gain.
 
 ## Repository layout
 
