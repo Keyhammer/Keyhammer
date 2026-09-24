@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 keyhammer = { package = "keyhammer-legacy", path = "../../legacy" }
-napi = { version = "2", features = ["default"] }
+napi = { version = "3", features = ["default"] }
 napi-derive = "2"
 
 [build-dependencies]
