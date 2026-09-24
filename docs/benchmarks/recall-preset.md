@@ -1,16 +1,16 @@
 # The high-recall preset (`SearchConfig::high_recall()`), 2026-09-24
 
-`SearchConfig::high_recall()` is the default configuration with `budget = 48` (three ordinary edits' worth of cost) instead of 32. It is opt-in: `SearchConfig::default()` keeps budget 32. This report measures what the preset buys and what it costs, inside this repository, with the M0 harness. It is part of issue #41.
+`SearchConfig::high_recall()` is `SearchConfig::default()` with `budget = 48` (three ordinary edits' worth of cost) instead of 32 and with the subtree bound on (`tsb = true`; `SearchConfig::default()` itself has `tsb = false`, budget 32). It is opt-in. This report measures what the preset buys and what it costs, inside this repository, with the M0 harness. It is part of issue #41. In the tables, "default" means `SearchConfig::default()` with `tsb: true` (the harness row `new+tsb`), so that the two sides differ only in the budget; the bound does not change results.
 
 ## Summary
 
-- At every dictionary size the preset returned the right word within the top 10 more often and had a higher MRR@10 than the default (budget 32, subtree bound on). The paired MRR differences are +0.120 (SE 0.018) at 10 000 words, +0.082 (SE 0.015) at 100 000 and +0.064 (SE 0.013) at 274 137.
-- It expands about 4.6-5.2 times as many trie nodes per query and its p95 latency is about 5.5-7.3 times higher (with the subtree bound on, median of three runs): 0.71 ms, 2.16 ms and 2.95 ms at 10 000, 100 000 and 274 137 words, against 0.13, 0.31 and 0.40 ms for the default.
+- At every dictionary size the preset returned the right word within the top 10 more often and had a higher MRR@10 than the default with the bound on (budget 32). The paired MRR differences are +0.120 (SE 0.018) at 10 000 words, +0.082 (SE 0.015) at 100 000 and +0.064 (SE 0.013) at 274 137.
+- It expands about 4.6-5.2 times as many trie nodes per query and its p95 latency is about 5.5-7.3 times higher (both with the subtree bound on, median of three runs): 0.71 ms, 2.16 ms and 2.95 ms at 10 000, 100 000 and 274 137 words, against 0.13, 0.31 and 0.40 ms for the default.
 - The default stays 32. Budget 64 is still accepted (it is the engine's maximum) but is not offered as a preset.
 
 ## Method
 
-- Harness: `bench/src/bin/m0.rs`, run as `cargo run --release -p keyhammer-bench --bin m0 -- bench/data` after the data scripts in `bench/` (data is not committed). It now also runs two extra rows, `hr` (the preset) and `hr+tsb` (the preset with `tsb: true`), and prints R@10, the largest node count of one query, the number of truncated searches, and the paired difference of `hr+tsb` against `new+tsb`.
+- Harness: `bench/src/bin/m0.rs`, run as `cargo run --release -p keyhammer-bench --bin m0 -- bench/data` after the data scripts in `bench/` (data is not committed). It now also runs two extra rows, `hr` (budget 48 with the bound off) and `hr+tsb` (budget 48 with the bound on, which is what `high_recall()` returns), and prints R@10, the largest node count of one query, the number of truncated searches, and the paired difference of `hr+tsb` against `new+tsb`.
 - Data: the 300 Birkbeck typo pairs of the M0 report against three dictionaries of 10 000, 100 000 and 274 137 English words (a-z only). Single corpus, single sample, one machine (16 logical cores, Windows), one build of the code.
 - Both configurations use `k = 10`, `ranking = Coarse` (the default) and QWERTY costs. The comparison is the preset against the default, both with `tsb: true`. The subtree bound does not change the results (only the work), so MRR, R@10 and nodes do not depend on it for the same budget; latency does.
 - MRR@10 and R@10: the reciprocal rank of the right word among the 10 returned (0 when absent), and the share of queries with the right word among them. The paired difference is the mean of the per-query differences with its standard error (sample standard deviation over the square root of 300).
@@ -40,7 +40,7 @@ Work and latency (`tsb` on; median of three runs; microseconds):
 | 274 137 | 32 | 995 | 2033 | 272 | 401 | | |
 | 274 137 | 48 | 4590 | 14679 | 957 | 2945 | 7.3x | 4.6x |
 
-Without the subtree bound (the preset as returned by `high_recall()`, whose `tsb` is `false`; median of three): the preset expands 3562 / 6613 / 6660 nodes per query and its p95 is 806 / 2561 / 3715 us at 10 000 / 100 000 / 274 137 words, against 155 / 401 / 493 us for the default without the bound (5.2x, 6.4x and 7.5x). Setting `tsb: true` lowered the preset's node count by 28-31% and its p95 by about 12-21% in these runs. No search reached the node limit (`max_nodes = 100 000`); the largest single query expanded 21 764 nodes (no bound) or 14 679 (bound).
+Note, without the subtree bound (row `hr`, i.e. `high_recall()` with `tsb` set to `false`; median of three): the preset expands 3562 / 6613 / 6660 nodes per query and its p95 is 806 / 2561 / 3715 us at 10 000 / 100 000 / 274 137 words, against 155 / 401 / 493 us for the default without the bound (5.2x, 6.4x and 7.5x). The bound, which the preset turns on, lowered the preset's node count by 28-31% and its p95 by about 12-21% in these runs. No search reached the node limit (`max_nodes = 100 000`); the largest single query expanded 21 764 nodes (no bound) or 14 679 (bound).
 
 ## Comparison with the figures in the issue
 

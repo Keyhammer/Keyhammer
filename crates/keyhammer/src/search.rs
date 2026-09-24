@@ -84,10 +84,11 @@ pub struct SearchConfig {
 
 impl SearchConfig {
     /// An opt-in configuration that trades speed for recall: the default
-    /// settings with `budget = 48` (three ordinary edits' worth of cost).
+    /// settings with `budget = 48` (three ordinary edits' worth of cost) and the
+    /// subtree bound on (`tsb = true`, which does not change the results).
     ///
     /// On the benchmark in `docs/benchmarks/recall-preset.md` (300 Birkbeck
-    /// typo pairs, one machine, one run) it found the right word more often
+    /// typo pairs, one machine, median of three runs) it found the right word more often
     /// than the default at every dictionary size, at the price of expanding
     /// several times more trie nodes per query and a higher latency; the
     /// measured numbers are in that file. Measure it on your own dictionary
@@ -99,11 +100,13 @@ impl SearchConfig {
     /// use keyhammer::search::SearchConfig;
     /// let cfg = SearchConfig { k: 5, ..SearchConfig::high_recall() };
     /// assert_eq!(cfg.budget, 48);
+    /// assert!(cfg.tsb);
     /// ```
     #[must_use]
     pub fn high_recall() -> Self {
         Self {
             budget: 48,
+            tsb: true,
             ..Self::default()
         }
     }

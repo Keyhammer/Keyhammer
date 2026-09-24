@@ -403,15 +403,14 @@ fn first_byte_units_depend_on_the_kind_of_edit() {
 }
 
 #[test]
-fn the_high_recall_preset_is_the_default_with_budget_48() {
+fn the_high_recall_preset_is_the_default_with_budget_48_and_the_bound_on() {
     let d = SearchConfig::default();
     let p = SearchConfig::high_recall();
     assert_eq!(d.budget, 32, "the default budget must stay 32");
+    assert!(!d.tsb, "the default keeps the subtree bound off");
     assert_eq!(p.budget, 48);
-    assert_eq!(
-        (p.k, p.tsb, p.max_nodes, p.ranking),
-        (d.k, d.tsb, d.max_nodes, d.ranking)
-    );
+    assert!(p.tsb);
+    assert_eq!((p.k, p.max_nodes, p.ranking), (d.k, d.max_nodes, d.ranking));
 }
 
 #[test]
@@ -435,4 +434,30 @@ fn the_budget_limit_stays_64_and_the_preset_is_below_it() {
             max: 64
         }
     );
+}
+
+/// Six deletions at cost 8 each exactly reach the budget of 48 (band half-width
+/// 6), so an under-wide band would miss the only term.
+#[test]
+fn budget_48_reaches_a_term_six_deletions_away() {
+    let trie = Trie::build(&[("b", 1)]).unwrap();
+    for tsb in [false, true] {
+        let cfg = SearchConfig {
+            tsb,
+            ..SearchConfig::high_recall()
+        };
+        let got = run(&trie, b"bbbbbbb", &cfg);
+        assert_eq!(got, vec![(0, 48)], "tsb={tsb}");
+        assert_eq!(
+            got,
+            oracle_topk(
+                &trie,
+                &CostModel::qwerty(),
+                b"bbbbbbb",
+                48,
+                cfg.k,
+                cfg.ranking
+            )
+        );
+    }
 }

@@ -52,6 +52,12 @@ fn score(rank: Option<usize>, rr: &mut Vec<f64>, r1: &mut usize) {
     }
 }
 
+/// Share of queries whose right word was returned within the top 10. Every
+/// search asks for the top 10, so a non-zero reciprocal rank means it was found.
+fn r10(r: &Row) -> f64 {
+    r.rr.iter().filter(|x| **x > 0.0).count() as f64 / r.rr.len() as f64
+}
+
 fn mean(v: &[f64]) -> f64 {
     v.iter().sum::<f64>() / v.len() as f64
 }
@@ -127,8 +133,8 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
     let trie = Trie::build(&items).expect("trie");
     let build_ms = t0.elapsed().as_secs_f64() * 1e3;
     let cm = CostModel::qwerty();
-    // "hr" and "hr+tsb" run the `SearchConfig::high_recall()` preset (budget 48)
-    // without and with the subtree bound.
+    // "hr" and "hr+tsb" use the budget of the `SearchConfig::high_recall()` preset (48)
+    // with the subtree bound forced off and on (the preset itself turns it on).
     for (name, tsb, ranking, high_recall) in [
         ("new", false, Ranking::Coarse, false),
         ("new+tsb", true, Ranking::Coarse, false),
@@ -245,7 +251,7 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
             r.name,
             r.mrr,
             r.r1,
-            r.rr.iter().filter(|x| **x > 0.0).count() as f64 / r.rr.len() as f64,
+            r10(r),
             r.p50_us,
             r.p95_us,
             r.extra
@@ -260,9 +266,6 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> Vec<Row> {
     }
     if let (Some(hr), Some(tsb)) = (get("hr+tsb"), get("new+tsb")) {
         print_paired(hr, tsb);
-        // Every search asks for the top 10, so a non-zero reciprocal rank means
-        // the right word was returned within the top 10.
-        let r10 = |r: &Row| r.rr.iter().filter(|x| **x > 0.0).count() as f64 / r.rr.len() as f64;
         println!(
             "high_recall vs default (tsb on): R@10 {:.3} vs {:.3}, p50 x{:.1}, p95 x{:.1}",
             r10(hr),
