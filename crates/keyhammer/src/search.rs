@@ -79,6 +79,7 @@ pub struct Output {
 
 /// Why a search was rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SearchError {
     /// The query is longer than [`MAX_QUERY_LEN`].
     QueryTooLong {
