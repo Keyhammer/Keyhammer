@@ -180,7 +180,7 @@ fn run(size: &str, dir: &str, tests: &[(String, String)]) -> (Vec<Row>, usize) {
     let mut rows = Vec::new();
     println!("\n=== dictionary: {} words ({size}) ===", words.len());
 
-    // new engine: without and with TSB (coarse ranking, the default), and
+    // new engine: without and with TSB (coarse ranking, the default; the bound itself became the default of `SearchConfig` later, see docs/benchmarks/tsb-default.md), and
     // with TSB ranked by the exact weighted cost (the previous order).
     // ties@10 is the share of queries whose returned top 10 holds at least two
     // terms with the same exact weighted cost.

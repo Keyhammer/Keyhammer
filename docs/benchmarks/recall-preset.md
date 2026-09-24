@@ -1,6 +1,6 @@
 # The high-recall preset (`SearchConfig::high_recall()`), 2026-09-24
 
-`SearchConfig::high_recall()` is `SearchConfig::default()` with `budget = 48` (three ordinary edits' worth of cost) instead of 32 and with the subtree bound on (`tsb = true`; `SearchConfig::default()` itself has `tsb = false`, budget 32). It is opt-in. This report measures what the preset buys and what it costs, inside this repository, with the M0 harness. It is part of issue #41. In the tables, "default" means `SearchConfig::default()` with `tsb: true` (the harness row `new+tsb`), so that the two sides differ only in the budget; the bound does not change results.
+`SearchConfig::high_recall()` is `SearchConfig::default()` with `budget = 48` (three ordinary edits' worth of cost) instead of 32 and with the subtree bound on (`tsb = true`; since issue #49 `SearchConfig::default()` has `tsb = true` too, with budget 32; the preset sets it explicitly). It is opt-in. This report measures what the preset buys and what it costs, inside this repository, with the M0 harness. It is part of issue #41. In the tables, "default" means `SearchConfig::default()` with `tsb: true` (the harness row `new+tsb`; these runs predate the change of the default, so the harness sets it explicitly), so that the two sides differ only in the budget; the bound does not change results.
 
 ## Summary
 

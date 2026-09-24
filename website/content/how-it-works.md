@@ -71,9 +71,9 @@ The result is exact, and the test suite compares it with a brute-force oracle.
 
 ## The subtree signature bound
 
-Without `tsb`, the lower bound of a node is the smallest cell of its row, or
+With `tsb: false`, the lower bound of a node is the smallest cell of its row, or
 the smallest cell of the parent row plus the cheapest transposition. With
-`tsb: true`, each cell is raised by what the rest of the query must still pay,
+`tsb: true` (the default), each cell is raised by what the rest of the query must still pay,
 given what exists below the node:
 
 - a length term: if no term below the node has a length compatible with the

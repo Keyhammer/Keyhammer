@@ -54,14 +54,14 @@ Build time and index memory at the full dictionary:
 
 | Engine | Package and version | Licence | Configuration | Ranking of the top 10 |
 |---|---|---|---|---|
-| keyhammer | `keyhammer_wasm.wasm` from this repository (`wasm` profile: size-optimised, 39 218 bytes raw, 16 896 bytes gzip) | AGPL-3.0-or-later | `kh_search` with k = 10, budget 32 (two ordinary edits), ranking 0 (`Coarse`), QWERTY costs; the settings of the Rust report, except that the subtree bound (`tsb`) is not available through the wasm API and stays off | cost rounded up to whole units of 16, then higher weight, then term |
+| keyhammer | `keyhammer_wasm.wasm` from this repository (`wasm` profile: size-optimised, 39 218 bytes raw, 16 896 bytes gzip) | AGPL-3.0-or-later | `kh_search` with k = 10, budget 32 (two ordinary edits), ranking 0 (`Coarse`), QWERTY costs; the settings of the Rust report, except that the subtree bound (`tsb`) is not available through the wasm API; these numbers were taken with the bound off, before it became the default (issue #49, `tsb-default.md`), and were not re-measured | cost rounded up to whole units of 16, then higher weight, then term |
 | keyhammer/hr | the same module | AGPL-3.0-or-later | the same with budget 48 | the same |
 | minisearch | `minisearch` 7.2.0 | MIT | `new MiniSearch({ fields: ['t'] })`, `addAll`, `search(q, { fuzzy: 2, prefix: false })`; results mapped back to the dictionary term by id | MiniSearch's own score |
 | fuse | `fuse.js` 7.5.0 | Apache-2.0 | `new Fuse(terms, { threshold: 0.4, ignoreLocation: true })`, `search(q, { limit: 10 })` | Fuse's own score |
 | ufuzzy | `@leeoniya/ufuzzy` 1.0.19 | MIT | `new uFuzzy({ intraMode: 1 })` (one error per term: substitution, transposition, insertion or deletion), `search(terms, q, 0, 1e9)` | uFuzzy's own ranking (see below) |
 | fuzzysort | `fuzzysort` 4.0.2 | MIT | targets prepared with `fuzzysort.prepare`, `go(q, prepared, { limit: 10, threshold: 0 })` | fuzzysort's own score |
 
-`keyhammer/hr` is the wasm equivalent of `SearchConfig::high_recall()` (budget 48). The wasm interface has no function for the preset, so the budget is passed as an argument; the preset also turns the subtree bound on, which changes the work done and not the results (`recall-preset.md`). Since the wasm interface does not expose `tsb`, both keyhammer rows run without it, and their latency is not comparable with the Rust report's, which had it on.
+`keyhammer/hr` is the wasm equivalent of `SearchConfig::high_recall()` (budget 48). The wasm interface has no function for the preset, so the budget is passed as an argument; the preset also turns the subtree bound on, which changes the work done and not the results (`recall-preset.md`). Since the wasm interface does not expose `tsb`, both keyhammer rows in these runs ran without it (the default then); a build made after the default changed runs with it on and is expected, not measured, to be faster. Their latency was not comparable with the Rust report's, which had it on.
 
 Configuration choices, made before the measurements:
 

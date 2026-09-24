@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- `SearchConfig::default()` now has `tsb: true` (the subtree bound was off). Hits, order and
+  costs are unchanged (oracle-tested); on the 300 Birkbeck typo pairs it expands 33-35% fewer nodes with
+  about 19-21% lower p95 latency at the default budget (one machine, shared, median of three runs),
+  and costs no extra memory (the per-node data is always built). `Stats` node counts change, and the
+  WebAssembly module, which builds its config from the default, now runs with the bound on. Set
+  `tsb: false` for the old behaviour. See `docs/benchmarks/tsb-default.md` (issue #49).
+
 ### Added
 - Fuzz targets (`crates/keyhammer/fuzz`, cargo-fuzz) for build and search
   robustness, brute-force oracle equality and `tsb` on/off equivalence, a
