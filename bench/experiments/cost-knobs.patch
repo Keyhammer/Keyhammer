@@ -1,0 +1,125 @@
+diff --git a/crates/keyhammer/src/cost.rs b/crates/keyhammer/src/cost.rs
+index 2eb6cfc..9325678 100644
+--- a/crates/keyhammer/src/cost.rs
++++ b/crates/keyhammer/src/cost.rs
+@@ -61,24 +61,62 @@ pub struct CostModel {
+     indel: Cost,
+     indel_double: Cost,
+     transpose: Cost,
++    first_quarters: Cost,
+     adjacent: [u32; 26],
+ }
+ 
++/// EXPERIMENT ONLY (bench/experiments/cost-knobs.patch, never merged): the
++/// tunable costs. `first_quarters` is the factor on the first query byte in
++/// quarters (4 = x1.0, 5 = x1.25, 6 = x1.5); costs must be multiples of 4 so
++/// that the factor is exact.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct CostParams {
++    /// Ordinary substitution.
++    pub sub: Cost,
++    /// Substitution by a neighbouring key.
++    pub sub_adjacent: Cost,
++    /// Ordinary insertion or deletion.
++    pub indel: Cost,
++    /// Insertion or deletion of a doubled letter.
++    pub indel_double: Cost,
++    /// Adjacent transposition.
++    pub transpose: Cost,
++    /// First-byte factor in quarters.
++    pub first_quarters: Cost,
++}
++
++impl CostParams {
++    /// The shipped values.
++    pub const SHIPPED: CostParams = CostParams {
++        sub: 16,
++        sub_adjacent: 8,
++        indel: 16,
++        indel_double: 8,
++        transpose: 12,
++        first_quarters: 6,
++    };
++}
++
+ fn link(adjacent: &mut [u32; 26], a: u8, b: u8) {
+     let (ia, ib) = ((a - b'a') as usize, (b - b'a') as usize);
+     adjacent[ia] |= 1 << ib;
+     adjacent[ib] |= 1 << ia;
+ }
+ 
+-/// Edits on the first query byte are less likely, so they cost 1.5x.
+-#[inline]
+-fn at_start(cost: Cost, qpos: usize) -> Cost {
+-    if qpos == 0 { cost + cost / 2 } else { cost }
+-}
+-
+ impl CostModel {
++    /// Edits on the first query byte cost `first_quarters / 4` times more.
++    #[inline]
++    fn at_start(&self, cost: Cost, qpos: usize) -> Cost {
++        if qpos == 0 { cost * self.first_quarters / 4 } else { cost }
++    }
++
+     /// The default model with a QWERTY keyboard.
+     pub fn qwerty() -> Self {
++        Self::qwerty_with(CostParams::SHIPPED)
++    }
++
++    /// A QWERTY model with the given costs (experiment only).
++    pub fn qwerty_with(p: CostParams) -> Self {
+         let rows: [&[u8]; 3] = [b"qwertyuiop", b"asdfghjkl", b"zxcvbnm"];
+         let mut adjacent = [0u32; 26];
+         for (r, row) in rows.iter().enumerate() {
+@@ -97,11 +135,12 @@ impl CostModel {
+             }
+         }
+         Self {
+-            sub: 16,
+-            sub_adjacent: 8,
+-            indel: 16,
+-            indel_double: 8,
+-            transpose: 12,
++            sub: p.sub,
++            sub_adjacent: p.sub_adjacent,
++            indel: p.indel,
++            indel_double: p.indel_double,
++            transpose: p.transpose,
++            first_quarters: p.first_quarters,
+             adjacent,
+         }
+     }
+@@ -123,7 +162,7 @@ impl CostModel {
+         } else {
+             self.sub
+         };
+-        at_start(base, qpos)
++        self.at_start(base, qpos)
+     }
+ 
+     /// Cost of deleting the query byte at `qpos` (the user typed an extra byte).
+@@ -131,7 +170,7 @@ impl CostModel {
+     pub fn del_cost(&self, q: &[u8], qpos: usize) -> Cost {
+         let doubled =
+             qpos > 0 && matches!((q.get(qpos), q.get(qpos - 1)), (Some(a), Some(b)) if a == b);
+-        at_start(
++        self.at_start(
+             if doubled {
+                 self.indel_double
+             } else {
+@@ -149,13 +188,13 @@ impl CostModel {
+         } else {
+             self.indel
+         };
+-        at_start(base, qpos)
++        self.at_start(base, qpos)
+     }
+ 
+     /// Cost of swapping two adjacent bytes, the first at `qpos` in the query.
+     #[inline]
+     pub fn transpose_cost(&self, qpos: usize) -> Cost {
+-        at_start(self.transpose, qpos)
++        self.at_start(self.transpose, qpos)
+     }
+ 
+     /// Smallest cost of any single edit.

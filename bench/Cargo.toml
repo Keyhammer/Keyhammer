@@ -9,3 +9,12 @@ publish = false
 [dependencies]
 keyhammer = { path = "../crates/keyhammer" }
 keyhammer-legacy = { path = "../legacy" }
+
+[features]
+# Needs bench/experiments/cost-knobs.patch applied to the core crate (experiment only).
+calibration = []
+
+[[bin]]
+name = "calib"
+path = "src/bin/calib.rs"
+required-features = ["calibration"]
