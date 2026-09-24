@@ -7,6 +7,8 @@ const sidebars = {
     'introduction',
     'how-it-works',
     'results',
+    'competitors',
+    'competitors-js',
     'prior-art',
     'contributing',
     'changelog',

@@ -11,7 +11,8 @@ npm run build    # production build into build/
 
 - `content/` holds the hand-written pages. `npm run sync` (run automatically
   by `prestart` and `prebuild`) generates the gitignored `docs/` folder from
-  `content/` plus four named repository files: `docs/benchmarks/m0.md`,
+  `content/` plus named repository files: `docs/benchmarks/m0.md`,
+  `docs/benchmarks/competitors.md`, `docs/benchmarks/competitors-js.md`,
   `docs/papers.md`, `CONTRIBUTING.md` and `CHANGELOG.md`. Edit those files, not
   the generated copies. Relative links in them are rewritten to absolute GitHub
   URLs.

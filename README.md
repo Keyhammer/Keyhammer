@@ -116,7 +116,7 @@ previous ordering by exact cost the gain is significant (+0.015, +0.028 and
 - `crates/keyhammer`: the core crate.
 - `legacy/`: the previous engine, kept only as a benchmark reference.
 - `crates/node`: Node.js binding of the legacy engine, used by the JS comparison.
-- `bench/`: data preparation, the Rust harness and the JS comparison.
+- `bench/`: data preparation, the Rust harnesses and the JS comparisons.
 - `docs/`: benchmark reports and prior-art notes.
 - `docs/design/`: written proofs, currently the lower bound of the search.
 
@@ -136,7 +136,12 @@ cd bench && npm install && node fetch-data.mjs && node prepare-m0-data.mjs
 cargo run --release -p keyhammer-bench --bin m0 -- bench/data
 ```
 
-The JS comparison (`node compare.mjs` in `bench/`) needs the legacy Node binding
+Competitive benchmarks: [`docs/benchmarks/competitors.md`](docs/benchmarks/competitors.md)
+(Rust libraries, harness in `bench/competitors`) and
+[`docs/benchmarks/competitors-js.md`](docs/benchmarks/competitors-js.md) (the WebAssembly build
+against JavaScript libraries, harness in `bench/js-competitors`).
+
+The old JS comparison of the legacy binding (`node compare.mjs` in `bench/`) needs the legacy Node binding
 built first. It loads `crates/node/keyhammer.node`:
 
 ```bash
