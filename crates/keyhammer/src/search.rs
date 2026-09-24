@@ -21,6 +21,9 @@
 //! one.
 //! [`Ranking::Exact`] ranks by the exact weighted cost instead, then weight,
 //! then id. In both modes [`Hit::cost`] is the exact weighted cost.
+//!
+//! [`Searcher::search_prefix`] is the autocomplete variant: a term costs what its best prefix
+//! costs. See `docs/design/prefix-mode.md`.
 
 use alloc::collections::BinaryHeap;
 use alloc::vec::Vec;
@@ -147,12 +150,19 @@ pub struct Hit {
 }
 
 /// Work counters for one search.
+///
+/// Non-exhaustive: fields may be added, so build it with `Stats::default()` if at all.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Stats {
     /// Trie nodes expanded.
     pub nodes_expanded: usize,
     /// Queue entries created (nodes and terminals).
     pub nodes_pushed: usize,
+    /// Banded DP rows computed (the root row plus one per child considered).
+    /// The row-free expansions of a prefix search (see
+    /// [`Searcher::search_prefix`]) count in `nodes_expanded` but not here.
+    pub rows_computed: usize,
     /// The node limit stopped the search early.
     pub truncated: bool,
 }
@@ -204,8 +214,13 @@ struct Entry {
     seq: u32,
     node: u32,
     term: u32,
-    /// Exact weighted cost of a terminal entry (unused for node entries).
+    /// Exact weighted cost of a terminal entry. For a node entry of a prefix
+    /// search: the best cost of a prefix ending at or above the node (`INF` if
+    /// none); unused by exact search.
     cost: Cost,
+    /// Prefix search only: every term at or below this node costs exactly
+    /// `cost`, so no row is needed to expand it.
+    settled: bool,
     depth: u16,
     cur: [Cost; ROW],
     prev: [Cost; ROW],
@@ -321,6 +336,7 @@ fn lower_bound(
     qmask: &[u64],
     cm: &CostModel,
     tsb: bool,
+    prefix: bool,
 ) -> Cost {
     let mut lb = INF;
     for (k, &d) in cur.iter().enumerate().take(2 * w + 1) {
@@ -333,7 +349,14 @@ fn lower_bound(
             let r = m - i;
             let lo = usize::from(trie.len_min(node)) - depth;
             let hi = usize::from(trie.len_max(node)) - depth;
-            let gap = if r < lo { lo - r } else { r.saturating_sub(hi) };
+            // Exact mode: the whole term must be aligned, so its length is in
+            // `lo..=hi`. Prefix mode: any prefix of the term, so only the upper
+            // end constrains the length.
+            let gap = if !prefix && r < lo {
+                lo - r
+            } else {
+                r.saturating_sub(hi)
+            };
             let comp = (gap.min(usize::from(INF)) as Cost).saturating_mul(cm.c_indel_min());
             let missing = (qmask[i] & !trie.below_mask(node)).count_ones() as Cost * cm.c_min();
             extra = comp.max(missing);
@@ -361,9 +384,19 @@ struct Expander<'a> {
     w: usize,
     budget: Cost,
     tsb: bool,
+    prefix: bool,
 }
 
 impl Expander<'_> {
+    /// Prefix mode: the cost of aligning the whole query with the term prefix
+    /// that ends at this node (depth `depth`, row `cur`), or `INF`.
+    fn prefix_cell(&self, depth: usize, cur: &[Cost; ROW]) -> Cost {
+        match (self.q.len() + self.w).checked_sub(depth) {
+            Some(k) if k <= 2 * self.w => cur[k],
+            _ => INF,
+        }
+    }
+
     /// The root row and the lower bound of the root.
     fn root(&self) -> ([Cost; ROW], Cost) {
         let cur = root_row(self.q, self.cm, self.w, self.budget);
@@ -378,6 +411,7 @@ impl Expander<'_> {
             self.qmask,
             self.cm,
             self.tsb,
+            self.prefix,
         );
         (cur, lb)
     }
@@ -429,6 +463,7 @@ impl Expander<'_> {
             self.qmask,
             self.cm,
             self.tsb,
+            self.prefix,
         );
         (row, lb)
     }
@@ -470,23 +505,30 @@ impl Searcher {
             node,
             term,
             cost,
+            settled: false,
             depth,
             cur,
             prev,
         });
     }
 
-    /// Returns the `cfg.k` best terms within `cfg.budget`, best first, in the
-    /// order set by `cfg.ranking`.
-    ///
-    /// `q` must already be lowercase; bytes outside `a..=z` are compared verbatim.
-    pub fn search(
-        &mut self,
-        trie: &Trie,
-        cm: &CostModel,
-        q: &[u8],
-        cfg: &SearchConfig,
-    ) -> Result<Output, SearchError> {
+    fn push_settled(&mut self, key: u64, node: u32, term: u32, cost: Cost, depth: u16) {
+        self.seq = self.seq.wrapping_add(1);
+        self.heap.push(Entry {
+            key,
+            seq: self.seq,
+            node,
+            term,
+            cost,
+            settled: true,
+            depth,
+            cur: [INF; ROW],
+            prev: [INF; ROW],
+        });
+    }
+
+    /// Validates the query and the budget; returns the band half-width.
+    fn check(q: &[u8], cm: &CostModel, cfg: &SearchConfig) -> Result<usize, SearchError> {
         if q.len() > MAX_QUERY_LEN {
             return Err(SearchError::QueryTooLong {
                 len: q.len(),
@@ -500,7 +542,21 @@ impl Searcher {
                 max: max_budget,
             });
         }
-        let w = usize::from(cfg.budget / cm.c_indel_min());
+        Ok(usize::from(cfg.budget / cm.c_indel_min()))
+    }
+
+    /// Returns the `cfg.k` best terms within `cfg.budget`, best first, in the
+    /// order set by `cfg.ranking`.
+    ///
+    /// `q` must already be lowercase; bytes outside `a..=z` are compared verbatim.
+    pub fn search(
+        &mut self,
+        trie: &Trie,
+        cm: &CostModel,
+        q: &[u8],
+        cfg: &SearchConfig,
+    ) -> Result<Output, SearchError> {
+        let w = Self::check(q, cm, cfg)?;
         let mut out = Output {
             hits: Vec::new(),
             stats: Stats::default(),
@@ -528,9 +584,11 @@ impl Searcher {
             w,
             budget: cfg.budget,
             tsb: cfg.tsb,
+            prefix: false,
         };
         let rank = |c: Cost| cfg.ranking.rank(c);
         let (root_cur, lb) = ex.root();
+        out.stats.rows_computed = 1;
         if lb <= cfg.budget {
             self.push(
                 pack(rank(lb), trie.max_weight(0), 0),
@@ -570,12 +628,179 @@ impl Searcher {
 
             for c in trie.children(v) {
                 let (row, lb) = ex.child(v, depth, c, &e.cur, &e.prev);
+                out.stats.rows_computed += 1;
                 if lb <= cfg.budget {
                     self.push(
                         pack(rank(lb), trie.max_weight(c), 0),
                         c as u32,
                         NO_TERM,
                         0,
+                        e.depth + 1,
+                        row,
+                        e.cur,
+                    );
+                }
+            }
+        }
+        self.qmask = qmask;
+        out.stats.nodes_pushed = self.seq as usize;
+        Ok(out)
+    }
+
+    /// Prefix (autocomplete) search: returns the `cfg.k` best terms that
+    /// *start with* something within `cfg.budget` of the query, best first.
+    ///
+    /// The cost of a term is the smallest weighted edit cost between the whole
+    /// query and any prefix of the term (the empty prefix included), so the
+    /// typed text may have typos while the rest of the term is free. The order
+    /// is the one of [`Searcher::search`]: [`Ranking`] cost, then higher
+    /// weight, then lower term id, and [`Hit::cost`] is that exact prefix cost.
+    /// A hit is the full term; the length of the matched prefix is not
+    /// reported. An empty query matches every term at cost 0, so the result is
+    /// the `k` heaviest terms.
+    ///
+    /// Configuration fields keep their meaning: `budget` bounds the prefix
+    /// cost, `tsb` selects the subtree bound (results never change with it),
+    /// `max_nodes` limits expanded trie nodes, including nodes expanded
+    /// without a row (see `docs/design/prefix-mode.md`); `Stats::truncated`
+    /// tells if it stopped the search, and the hits returned are then still
+    /// the first ones of the exact order.
+    ///
+    /// `q` must already be lowercase, as for [`Searcher::search`].
+    ///
+    /// ```
+    /// use keyhammer::cost::CostModel;
+    /// use keyhammer::search::{SearchConfig, Searcher};
+    /// use keyhammer::trie::Trie;
+    ///
+    /// let trie = Trie::build(&[("javascript", 10), ("java", 30), ("python", 50)]).unwrap();
+    /// let mut s = Searcher::new();
+    /// // "javs" types "s" for "a" (neighbouring keys); "java" starts both terms.
+    /// let out = s
+    ///     .search_prefix(&trie, &CostModel::qwerty(), b"javs", &SearchConfig::default())
+    ///     .unwrap();
+    /// let terms: Vec<&str> = out.hits.iter().map(|h| trie.term(h.id)).collect();
+    /// assert_eq!(terms, ["java", "javascript"]);
+    /// ```
+    pub fn search_prefix(
+        &mut self,
+        trie: &Trie,
+        cm: &CostModel,
+        q: &[u8],
+        cfg: &SearchConfig,
+    ) -> Result<Output, SearchError> {
+        let w = Self::check(q, cm, cfg)?;
+        let mut out = Output {
+            hits: Vec::new(),
+            stats: Stats::default(),
+        };
+        if cfg.k == 0 {
+            return Ok(out);
+        }
+        let m = q.len();
+        self.qmask.clear();
+        self.qmask.resize(m + 1, 0);
+        for i in (0..m).rev() {
+            self.qmask[i] = self.qmask[i + 1] | class(q[i]);
+        }
+        self.heap.clear();
+        self.seq = 0;
+
+        let qmask = core::mem::take(&mut self.qmask);
+        let ex = Expander {
+            trie,
+            cm,
+            q,
+            qmask: &qmask,
+            w,
+            budget: cfg.budget,
+            tsb: cfg.tsb,
+            prefix: true,
+        };
+        let rank = |c: Cost| cfg.ranking.rank(c);
+        // `acc` is the best cost of a prefix ending at or above a node, `lbd`
+        // the bound on the prefixes strictly below it; every term below costs
+        // at least `min(acc, lbd)`, and exactly `acc` when `lbd >= acc`.
+        let (root_cur, lbd) = ex.root();
+        out.stats.rows_computed = 1;
+        let acc = ex.prefix_cell(0, &root_cur);
+        let lb = acc.min(lbd);
+        if lb <= cfg.budget {
+            if acc < INF && lbd >= acc {
+                self.push_settled(pack(rank(acc), trie.max_weight(0), 0), 0, NO_TERM, acc, 0);
+            } else {
+                self.push(
+                    pack(rank(lb), trie.max_weight(0), 0),
+                    0,
+                    NO_TERM,
+                    acc,
+                    0,
+                    root_cur,
+                    [INF; ROW],
+                );
+            }
+        }
+
+        while let Some(e) = self.heap.pop() {
+            if e.term != NO_TERM {
+                out.hits.push(Hit {
+                    id: e.term,
+                    cost: e.cost,
+                    weight: trie.weight(e.term),
+                });
+                if out.hits.len() == cfg.k {
+                    break;
+                }
+                continue;
+            }
+            if out.stats.nodes_expanded >= cfg.max_nodes {
+                out.stats.truncated = true;
+                break;
+            }
+            out.stats.nodes_expanded += 1;
+            let v = e.node as usize;
+            let depth = usize::from(e.depth);
+            let acc = e.cost;
+
+            // A term ending here has had all its prefixes looked at.
+            let tid = trie.term_id(v);
+            if tid != NO_TERM && acc <= cfg.budget {
+                let key = pack(rank(acc), trie.weight(tid), tid);
+                self.push_settled(key, e.node, tid, acc, e.depth);
+            }
+
+            for c in trie.children(v) {
+                if e.settled {
+                    self.push_settled(
+                        pack(rank(acc), trie.max_weight(c), 0),
+                        c as u32,
+                        NO_TERM,
+                        acc,
+                        e.depth + 1,
+                    );
+                    continue;
+                }
+                let (row, lbd) = ex.child(v, depth, c, &e.cur, &e.prev);
+                out.stats.rows_computed += 1;
+                let acc_c = acc.min(ex.prefix_cell(depth + 1, &row));
+                let lb = acc_c.min(lbd);
+                if lb > cfg.budget {
+                    continue;
+                }
+                if acc_c < INF && lbd >= acc_c {
+                    self.push_settled(
+                        pack(rank(acc_c), trie.max_weight(c), 0),
+                        c as u32,
+                        NO_TERM,
+                        acc_c,
+                        e.depth + 1,
+                    );
+                } else {
+                    self.push(
+                        pack(rank(lb), trie.max_weight(c), 0),
+                        c as u32,
+                        NO_TERM,
+                        acc_c,
                         e.depth + 1,
                         row,
                         e.cur,
@@ -622,6 +847,10 @@ mod tests {
     /// Naive full-matrix weighted OSA cost, independent of the banded rows.
     /// `d[j][i]` aligns the term prefix `t[..j]` with the query prefix `q[..i]`.
     fn oracle(cm: &CostModel, q: &[u8], t: &[u8]) -> u32 {
+        oracle_matrix(cm, q, t)[t.len()][q.len()]
+    }
+
+    fn oracle_matrix(cm: &CostModel, q: &[u8], t: &[u8]) -> Vec<Vec<u32>> {
         const BIG: u32 = 1_000_000;
         let (m, n) = (q.len(), t.len());
         let mut d = vec![vec![BIG; m + 1]; n + 1];
@@ -651,7 +880,7 @@ mod tests {
                 d[j][i] = best;
             }
         }
-        d[n][m]
+        d
     }
 
     fn random_word(rng: &mut Rng, alpha: &[u8], max_len: usize) -> Vec<u8> {
@@ -733,6 +962,7 @@ mod tests {
         bounded: usize,
         terminals: usize,
         terminals_within: usize,
+        settled: usize,
     }
 
     /// Walks every node of `trie` for one query and checks the bound, the
@@ -759,6 +989,7 @@ mod tests {
             w,
             budget,
             tsb,
+            prefix: false,
         };
         let rankings = [Ranking::Coarse, Ranking::Exact];
 
@@ -888,5 +1119,194 @@ mod tests {
     fn lower_bound_never_exceeds_the_oracle_with_tsb() {
         let cov = check_mode(true);
         assert!(cov.bounded > 10_000 && cov.terminals_within > 1_000);
+    }
+
+    /// `D[m][j]` for every term prefix length `j` (the last column).
+    fn oracle_col(cm: &CostModel, q: &[u8], t: &[u8]) -> Vec<u32> {
+        oracle_matrix(cm, q, t).iter().map(|r| r[q.len()]).collect()
+    }
+
+    /// Prefix-mode counterpart of `check_instance`. For every node it walks
+    /// the same way `search_prefix` does (carrying `acc`) and checks
+    ///
+    /// - `lbd` (the bound on prefixes strictly longer than the node's) is at
+    ///   most `D[m][j']` for every term below and every `j' > depth`, when
+    ///   that is within the budget;
+    /// - `min(acc, lbd)` and its queue key are at most the prefix cost and key
+    ///   of every within-budget term below;
+    /// - a settled node (`acc < INF && lbd >= acc`) has every term below at
+    ///   exactly cost `acc`;
+    /// - at a terminal the cost `acc` equals the oracle prefix cost when that
+    ///   is within budget, and no cost is reported otherwise.
+    fn check_prefix_instance(
+        trie: &Trie,
+        cm: &CostModel,
+        q: &[u8],
+        budget: Cost,
+        tsb: bool,
+        cov: &mut Coverage,
+    ) {
+        let w = usize::from(budget / cm.c_indel_min());
+        let m = q.len();
+        let mut qmask = vec![0u64; m + 1];
+        for i in (0..m).rev() {
+            qmask[i] = qmask[i + 1] | class(q[i]);
+        }
+        let ex = Expander {
+            trie,
+            cm,
+            q,
+            qmask: &qmask,
+            w,
+            budget,
+            tsb,
+            prefix: true,
+        };
+        let cols: Vec<Vec<u32>> = (0..trie.len() as u32)
+            .map(|id| oracle_col(cm, q, trie.term(id).as_bytes()))
+            .collect();
+        let pcost: Vec<u32> = cols
+            .iter()
+            .map(|c| c.iter().copied().min().unwrap_or(u32::MAX))
+            .collect();
+        let n = trie.node_count();
+        // Terms at or below each node.
+        let mut below: Vec<Vec<u32>> = vec![Vec::new(); n];
+        for v in (0..n).rev() {
+            let tid = trie.term_id(v);
+            if tid != NO_TERM {
+                below[v].push(tid);
+            }
+            for c in trie.children(v) {
+                let kids = below[c].clone();
+                below[v].extend(kids);
+            }
+        }
+        let rankings = [Ranking::Coarse, Ranking::Exact];
+        let b32 = u32::from(budget);
+
+        let mut check_node = |v: usize, depth: usize, acc: Cost, lbd: Cost| {
+            let mut best = u32::MAX;
+            let mut deeper = u32::MAX;
+            for &t in &below[v] {
+                let col = &cols[t as usize];
+                let tail = &col[(depth + 1).min(col.len())..];
+                deeper = deeper.min(tail.iter().copied().min().unwrap_or(u32::MAX));
+                best = best.min(pcost[t as usize]);
+                if pcost[t as usize] <= b32 {
+                    let c = pcost[t as usize] as Cost;
+                    for r in rankings {
+                        let tk = pack(r.rank(c), trie.weight(t), t);
+                        let nk = pack(r.rank(acc.min(lbd)), trie.max_weight(v), 0);
+                        assert!(nk <= tk, "key above a term below node {v}, q {q:?}");
+                    }
+                }
+            }
+            if deeper <= b32 {
+                assert!(
+                    u32::from(lbd) <= deeper,
+                    "deeper bound {lbd} above {deeper} below node {v} at depth {depth} \
+                     (query {q:?}, budget {budget}, tsb {tsb})",
+                );
+            }
+            if best <= b32 {
+                assert!(
+                    u32::from(acc.min(lbd)) <= best,
+                    "min(acc, lbd) above {best}"
+                );
+            }
+            if acc < INF && lbd >= acc {
+                cov.settled += 1;
+                for &t in &below[v] {
+                    assert_eq!(
+                        pcost[t as usize],
+                        u32::from(acc),
+                        "settled node {v} has a term of another cost (query {q:?}, budget {budget})"
+                    );
+                }
+            }
+            best <= b32
+        };
+
+        cov.instances += 1;
+        let (root, lbd) = ex.root();
+        let acc = ex.prefix_cell(0, &root);
+        let b = check_node(0, 0, acc, lbd);
+        cov.nodes += 1;
+        cov.bounded += usize::from(b);
+        let mut stack = vec![(0usize, 0usize, root, [INF; ROW], acc)];
+        while let Some((v, depth, cur, prev, acc)) = stack.pop() {
+            let tid = trie.term_id(v);
+            if tid != NO_TERM {
+                cov.terminals += 1;
+                let c = pcost[tid as usize];
+                if c <= b32 {
+                    cov.terminals_within += 1;
+                    assert_eq!(u32::from(acc), c, "terminal cost, query {q:?}");
+                } else {
+                    assert!(acc > budget, "terminal reported beyond the budget");
+                }
+            }
+            for c in trie.children(v) {
+                let (row, lbd) = ex.child(v, depth, c, &cur, &prev);
+                let acc_c = acc.min(ex.prefix_cell(depth + 1, &row));
+                let b = check_node(c, depth + 1, acc_c, lbd);
+                cov.nodes += 1;
+                cov.bounded += usize::from(b);
+                stack.push((c, depth + 1, row, cur, acc_c));
+            }
+        }
+    }
+
+    fn check_prefix_mode(tsb: bool) -> Coverage {
+        let alphabets: [&[u8]; 4] = [b"aqw", b"asdfqwer", b"abcdefghijklmnopqrstuvwxyz", b"ab!\""];
+        let cm = CostModel::qwerty();
+        let mut cov = Coverage::default();
+        for (a, alpha) in alphabets.iter().enumerate() {
+            for d in 0..150 {
+                let mut rng = Rng::new((a as u64 + 1) * 1000 + d);
+                let dict = random_dictionary(&mut rng, alpha);
+                let items: Vec<(&str, u16)> = dict.iter().map(|(s, w)| (s.as_str(), *w)).collect();
+                let trie = Trie::build(&items).unwrap_or_else(|e| panic!("{e}"));
+                for _ in 0..8 {
+                    let q = if rng.below(4) == 0 {
+                        let len = rng.below(11);
+                        (0..len).map(|_| alpha[rng.below(alpha.len())]).collect()
+                    } else {
+                        // A truncated dictionary entry with 0 to 3 edits.
+                        let base = dict[rng.below(dict.len())].0.as_bytes();
+                        let cut = 1 + rng.below(base.len());
+                        let ops = rng.below(4);
+                        mutate(&mut rng, &base[..cut], alpha, ops)
+                    };
+                    for budget in [7, 15, 16, 24, 31, 32, 40, 48, 64] {
+                        check_prefix_instance(&trie, &cm, &q, budget, tsb, &mut cov);
+                    }
+                }
+            }
+        }
+        std::eprintln!(
+            "prefix, tsb {tsb}: {} instances, {} nodes checked ({} with a within-budget \
+             term below, {} settled), {} terminals ({} within budget)",
+            cov.instances,
+            cov.nodes,
+            cov.bounded,
+            cov.settled,
+            cov.terminals,
+            cov.terminals_within,
+        );
+        cov
+    }
+
+    #[test]
+    fn prefix_bound_never_exceeds_the_oracle_without_tsb() {
+        let cov = check_prefix_mode(false);
+        assert!(cov.bounded > 10_000 && cov.terminals_within > 1_000 && cov.settled > 1_000);
+    }
+
+    #[test]
+    fn prefix_bound_never_exceeds_the_oracle_with_tsb() {
+        let cov = check_prefix_mode(true);
+        assert!(cov.bounded > 10_000 && cov.terminals_within > 1_000 && cov.settled > 1_000);
     }
 }

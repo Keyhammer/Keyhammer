@@ -26,6 +26,21 @@ impl Rng {
 
 /// Naive full-matrix weighted OSA distance, written independently of the trie search.
 pub fn oracle_cost(cm: &CostModel, q: &[u8], t: &[u8]) -> u32 {
+    oracle_matrix(cm, q, t)[t.len()][q.len()]
+}
+
+/// Prefix-mode cost: the smallest weighted OSA cost between the whole query
+/// and any prefix of the term, the empty prefix included. It is the minimum
+/// of the last column `d[j][m]` of the same full matrix, so a transposition
+/// that straddles the cut point is never allowed (both swapped bytes must be
+/// inside the prefix).
+pub fn oracle_prefix_cost(cm: &CostModel, q: &[u8], t: &[u8]) -> u32 {
+    let d = oracle_matrix(cm, q, t);
+    d.iter().map(|row| row[q.len()]).min().unwrap_or(u32::MAX)
+}
+
+/// `d[j][i]` aligns the term prefix `t[..j]` with the query prefix `q[..i]`.
+fn oracle_matrix(cm: &CostModel, q: &[u8], t: &[u8]) -> Vec<Vec<u32>> {
     const BIG: u32 = 1_000_000;
     let (m, n) = (q.len(), t.len());
     let mut d = vec![vec![BIG; m + 1]; n + 1];
@@ -58,7 +73,7 @@ pub fn oracle_cost(cm: &CostModel, q: &[u8], t: &[u8]) -> u32 {
             d[j][i] = best;
         }
     }
-    d[n][m]
+    d
 }
 
 /// Exact top-k by brute force: (id, true cost) ordered by
@@ -73,9 +88,33 @@ pub fn oracle_topk(
     k: usize,
     ranking: Ranking,
 ) -> Vec<(u32, Cost)> {
+    oracle_topk_with(trie, cm, q, budget, k, ranking, oracle_cost)
+}
+
+/// [`oracle_topk`] for prefix mode (cost from [`oracle_prefix_cost`]).
+pub fn oracle_topk_prefix(
+    trie: &Trie,
+    cm: &CostModel,
+    q: &[u8],
+    budget: Cost,
+    k: usize,
+    ranking: Ranking,
+) -> Vec<(u32, Cost)> {
+    oracle_topk_with(trie, cm, q, budget, k, ranking, oracle_prefix_cost)
+}
+
+fn oracle_topk_with(
+    trie: &Trie,
+    cm: &CostModel,
+    q: &[u8],
+    budget: Cost,
+    k: usize,
+    ranking: Ranking,
+    cost: fn(&CostModel, &[u8], &[u8]) -> u32,
+) -> Vec<(u32, Cost)> {
     let mut all: Vec<(Cost, u32, u32, Cost)> = Vec::new();
     for id in 0..trie.len() as u32 {
-        let c = oracle_cost(cm, q, trie.term(id).as_bytes());
+        let c = cost(cm, q, trie.term(id).as_bytes());
         if c <= u32::from(budget) {
             let c = c as Cost;
             let rank_cost = match ranking {

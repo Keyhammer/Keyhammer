@@ -8,7 +8,7 @@ mod support;
 use keyhammer::cost::{CostModel, Layout};
 use keyhammer::search::{Ranking, SearchConfig, Searcher};
 use keyhammer::trie::Trie;
-use support::{Rng, oracle_topk};
+use support::{Rng, oracle_topk, oracle_topk_prefix};
 
 fn random_word(rng: &mut Rng, alpha: u64) -> Vec<u8> {
     let len = 1 + rng.below(9) as usize;
@@ -383,5 +383,146 @@ fn every_layout_matches_the_oracle_with_and_without_the_bound() {
                 check_with(layout, seed + 50, 8, 200, tsb, Ranking::Exact);
             }
         }
+    }
+}
+
+/// Prefix mode against the brute-force prefix oracle: queries are truncated
+/// dictionary words with 0-3 edits (the autocomplete case), sometimes
+/// unrelated words or empty. Runs the exact search and a node-limited one.
+fn check_prefix(seed: u64, alpha: u64, dict_size: usize, tsb: bool, ranking: Ranking) {
+    let mut rng = Rng::new(seed);
+    let words: Vec<Vec<u8>> = (0..dict_size)
+        .map(|_| random_word(&mut rng, alpha))
+        .collect();
+    let strings: Vec<String> = words
+        .iter()
+        .map(|w| String::from_utf8(w.clone()).unwrap())
+        .collect();
+    let items: Vec<(&str, u16)> = strings
+        .iter()
+        .map(|s| {
+            let w = if rng.below(3) == 0 {
+                100
+            } else {
+                rng.below(65_536) as u16
+            };
+            (s.as_str(), w)
+        })
+        .collect();
+    let trie = Trie::build(&items).unwrap();
+    let cm = CostModel::qwerty();
+    let mut searcher = Searcher::new();
+
+    for _ in 0..60 {
+        let q = match rng.below(8) {
+            0 => random_word(&mut rng, alpha),
+            1 => Vec::new(),
+            _ => {
+                let base = &words[rng.below(dict_size as u64) as usize];
+                let cut = 1 + rng.below(base.len() as u64) as usize;
+                let ops = rng.below(4) as usize;
+                mutate(&mut rng, &base[..cut], alpha, ops)
+            }
+        };
+        for (k, budget) in [
+            (1usize, 16u16),
+            (5, 32),
+            (20, 24),
+            (3, 7),
+            (10, 64),
+            (7, 48),
+        ] {
+            let cfg = SearchConfig {
+                k,
+                budget,
+                tsb,
+                ranking,
+                ..SearchConfig::default()
+            };
+            let out = searcher.search_prefix(&trie, &cm, &q, &cfg).unwrap();
+            let got: Vec<(u32, u16)> = out.hits.iter().map(|h| (h.id, h.cost)).collect();
+            let want = oracle_topk_prefix(&trie, &cm, &q, budget, k, ranking);
+            assert_eq!(
+                got,
+                want,
+                "seed={seed} alpha={alpha} q={:?} k={k} budget={budget} tsb={tsb} ranking={ranking:?}",
+                String::from_utf8_lossy(&q)
+            );
+            assert!(!out.stats.truncated);
+            // A node limit may cut the list short, never reorder or corrupt it.
+            let cut = SearchConfig {
+                max_nodes: 1 + rng.below(30) as usize,
+                ..cfg
+            };
+            let out = searcher.search_prefix(&trie, &cm, &q, &cut).unwrap();
+            let got: Vec<(u32, u16)> = out.hits.iter().map(|h| (h.id, h.cost)).collect();
+            assert!(out.stats.nodes_expanded <= cut.max_nodes);
+            if out.stats.truncated {
+                assert_eq!(got[..], want[..got.len()], "seed={seed} truncated");
+            } else {
+                assert_eq!(got, want, "seed={seed} untruncated limited run");
+            }
+        }
+    }
+}
+
+#[test]
+fn prefix_matches_the_oracle_on_tiny_alphabets() {
+    for seed in 600..625 {
+        for tsb in [false, true] {
+            check_prefix(seed, 3, 120, tsb, Ranking::Coarse);
+            check_prefix(seed, 3, 120, tsb, Ranking::Exact);
+        }
+    }
+}
+
+#[test]
+fn prefix_matches_the_oracle_on_medium_alphabets() {
+    for seed in 700..715 {
+        for tsb in [false, true] {
+            check_prefix(seed, 8, 300, tsb, Ranking::Coarse);
+            check_prefix(seed, 8, 300, tsb, Ranking::Exact);
+        }
+    }
+}
+
+#[test]
+fn prefix_matches_the_oracle_on_the_full_alphabet() {
+    for seed in 800..808 {
+        for tsb in [false, true] {
+            check_prefix(seed, 26, 400, tsb, Ranking::Coarse);
+            check_prefix(seed, 26, 400, tsb, Ranking::Exact);
+        }
+    }
+}
+
+#[test]
+fn prefix_cost_never_exceeds_the_exact_cost() {
+    // A whole-term match is one of the prefixes, so the prefix cost of a term
+    // never exceeds its exact cost.
+    let mut rng = Rng::new(77);
+    let words: Vec<Vec<u8>> = (0..200).map(|_| random_word(&mut rng, 4)).collect();
+    let strings: Vec<String> = words
+        .iter()
+        .map(|w| String::from_utf8(w.clone()).unwrap())
+        .collect();
+    let items: Vec<(&str, u16)> = strings.iter().map(|s| (s.as_str(), 5)).collect();
+    let trie = Trie::build(&items).unwrap();
+    let cm = CostModel::qwerty();
+    let mut s = Searcher::new();
+    let cfg = SearchConfig {
+        k: 1000,
+        budget: 32,
+        ranking: Ranking::Exact,
+        ..SearchConfig::default()
+    };
+    for w in words.iter().take(60) {
+        let ex = s.search(&trie, &cm, w, &cfg).unwrap();
+        let pre = s.search_prefix(&trie, &cm, w, &cfg).unwrap();
+        for h in &ex.hits {
+            let p = pre.hits.iter().find(|p| p.id == h.id).unwrap();
+            assert!(p.cost <= h.cost);
+        }
+        assert!(pre.hits.len() >= ex.hits.len());
     }
 }

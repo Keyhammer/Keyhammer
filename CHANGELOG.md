@@ -21,6 +21,15 @@ All notable changes to this project are documented here. The format follows
   beyond two edits (budgets 32, 48 and 64 with paired differences, nodes and latency; what the unreachable pairs
   are) and on phonetic and spelling-rule candidates prototyped outside the core with held-out splits. Verdict: no
   budget-64 preset, no spelling-rule operation; phonetic candidates are a promising follow-up (issue #22).
+- `Searcher::search_prefix`: a prefix (autocomplete) mode. A term matches when the query is within
+  the budget of some prefix of it (cost = best alignment of the whole query against any prefix,
+  transpositions only inside the prefix); ranking is as in `search` (cost rank, weight, id). The
+  subtree bound is adapted (only the upper length end constrains a prefix) and subtrees whose
+  terms all cost the same are enumerated by weight without DP rows. Oracle-tested against a
+  brute-force prefix reference (tsb on/off, both rankings), with a property test of the adapted
+  bound and a new `prefix_oracle_equality` fuzz target. `Stats` gains `rows_computed` and is now `#[non_exhaustive]` (it can no longer be built with a struct literal outside the crate). Work counters
+  against the exact mode are in `docs/benchmarks/prefix-mode.md`; the proof is in
+  `docs/design/prefix-mode.md` (issue #30).
 - `bindings/node`: a Node.js package for the new engine, plain JavaScript over the
   WebAssembly build (`Index.build`, `index.search` with `k`, `budget` and `ranking`,
   TypeScript types, argument errors); tested by a CI job on ubuntu, macos and windows
