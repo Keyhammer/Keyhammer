@@ -148,7 +148,7 @@ Measured:
 
 Hypotheses, not tested here:
 
-- The first-letter loss is the x1.5 factor at position 0, as #21 and #40 found on the GitHub corpus; the baseline has no such factor. Removing it would need a core change and a re-run.
+- The first-letter loss is the x1.5 factor at position 0, as #21 and #40 found on the GitHub corpus; the baseline has no such factor. Removing it would need a core change and a re-run. (Note, 2026-09-24, from `calibration.md`: the loss is on first-letter pairs, but a change of the factor alone is not the fix. With everything else shipped, factor 1.0 scored +0.0012 on validation and -0.0031 on the calibration test split, and the calibration gain of +0.164 on first-letter pairs came from a model that also changed the neighbouring-key and indel costs; the two appear to interact.)
 - The transposition loss is almost entirely first-letter transpositions (n = 26, -0.56), which the x1.5 factor prices at 18, two whole units. Mid-word transpositions (12, one unit under `Coarse`) are -0.010. Cost 12 is not implicated.
 - 64% of substitution pairs (9 125 of 14 159) are adjacent keys, well above chance (about 16%), yet ranking did not benefit.
 

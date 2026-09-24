@@ -364,13 +364,19 @@ struct Model {
     cm: CostModel,
     /// Same costs with the first-byte factor 1.0 (used by the "after" ranking).
     cm1: CostModel,
+    budget: u16,
 }
 
 impl Model {
     fn new(cfg: Cfg) -> Self {
+        Self::with_budget(cfg, BUDGET)
+    }
+
+    fn with_budget(cfg: Cfg, budget: u16) -> Self {
         let mut p1 = cfg.p;
         p1.first_quarters = 4;
         Model {
+            budget,
             cfg,
             cm: CostModel::qwerty_with(cfg.p),
             cm1: CostModel::qwerty_with(p1),
@@ -396,7 +402,7 @@ fn top10(s: &mut Searcher, trie: &Trie, m: &Model, q: &[u8], c: &mut Counters) -
     if !m.cfg.after || m.cfg.p.first_quarters == 4 {
         let cfg = SearchConfig {
             k: TOP,
-            budget: BUDGET,
+            budget: m.budget,
             tsb: true,
             ..SearchConfig::default()
         };
@@ -409,7 +415,7 @@ fn top10(s: &mut Searcher, trie: &Trie, m: &Model, q: &[u8], c: &mut Counters) -
     loop {
         let cfg = SearchConfig {
             k,
-            budget: BUDGET,
+            budget: m.budget,
             tsb: true,
             ranking: Ranking::Exact,
             ..SearchConfig::default()
@@ -704,16 +710,18 @@ Pre-registered calibration of the cost model (issue #21). Needs the patch
 bench/experiments/cost-knobs.patch applied to crates/keyhammer/src/cost.rs.
 
 USAGE:
-    calib [DATA_DIR] [--threads N] [--counts] [--selfcheck]
+    calib [DATA_DIR] [--threads N] [--counts] [--selfcheck] [--exploratory]
 
     --counts     print the size of every split and stop (no model is run)
     --selfcheck  run internal consistency checks on 300 train queries and stop
+    --exploratory  word overlap, clustered SE, first-letter concentration and node-matched
+                 budget controls on the (spent) test split; cannot change the verdict
 ";
 
 fn main() {
     let mut dir = "bench/data".to_string();
     let mut threads = 6usize;
-    let (mut counts_only, mut selfcheck) = (false, false);
+    let (mut counts_only, mut selfcheck, mut exploratory) = (false, false, false);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -729,6 +737,7 @@ fn main() {
             }
             "--counts" => counts_only = true,
             "--selfcheck" => selfcheck = true,
+            "--exploratory" => exploratory = true,
             _ if a.starts_with('-') => die(&format!("unknown option {a:?}")),
             _ => dir = a,
         }
@@ -749,6 +758,11 @@ fn main() {
 
     if selfcheck {
         run_selfcheck(&trie, &data);
+        return;
+    }
+
+    if exploratory {
+        run_exploratory(&trie, &data);
         return;
     }
 
@@ -1179,5 +1193,194 @@ fn run_selfcheck(trie: &Trie, data: &Data) {
     println!(
         "check c (\"after\" lists complete): {}",
         if n_incomplete == 0 { "pass" } else { "FAIL" }
+    );
+}
+
+/// Exploratory analyses added after the review of the first report. They use
+/// the test split, which the pre-registered run already spent, so they cannot
+/// change the verdict; the report labels them as such.
+fn run_exploratory(trie: &Trie, data: &Data) {
+    let mk = |fq: u16, t: u16, a: u16, i: u16, d: u16| Cfg {
+        p: CostParams {
+            sub: 16,
+            sub_adjacent: a,
+            indel: i,
+            indel_double: d,
+            transpose: t,
+            first_quarters: fq,
+        },
+        after: false,
+    };
+    let selected = mk(5, 12, 12, 12, 8);
+    let ship = Model::new(shipped());
+    let (ship_te, ship_c) = eval_split(trie, &ship, &data.test);
+    let nq = data.test.iter().map(|c| c.pairs.len()).sum::<usize>() as f64;
+    let per_q = |c: &Counters| c.nodes as f64 / nq;
+
+    println!(
+        "### Exploratory: node-matched budget controls (test split, difference to the shipped model at budget 32)\n"
+    );
+    println!(
+        "shipped at budget 32: {:.1} nodes per query\n",
+        per_q(&ship_c)
+    );
+    header(&data.test);
+    let arms: [(&str, Cfg, u16); 8] = [
+        ("shipped, budget 36", shipped(), 36),
+        ("shipped, budget 40", shipped(), 40),
+        ("shipped, budget 48", shipped(), 48),
+        ("selected f1.25B t12 a12 i12/8, budget 32", selected, 32),
+        ("selected, budget 28", selected, 28),
+        ("f1.25B t12 a12 i16/8, budget 32", mk(5, 12, 12, 16, 8), 32),
+        ("f1.25B t12 a12 i16/8, budget 28", mk(5, 12, 12, 16, 8), 28),
+        (
+            "f1.0B t12 a8 i16/8 (F1), budget 32",
+            mk(4, 12, 8, 16, 8),
+            32,
+        ),
+    ];
+    let mut nodes_lines = Vec::new();
+    for (label, cfg, budget) in arms {
+        let m = Model::with_budget(cfg, budget);
+        let (r, c) = eval_split(trie, &m, &data.test);
+        print_diff_row(label, &diff(&r, &ship_te));
+        nodes_lines.push(format!("| {label} | {:.1} | {} |", per_q(&c), c.truncated));
+    }
+    println!("\n| arm | nodes per query | truncated |\n|---|---|---|");
+    for l in nodes_lines {
+        println!("{l}");
+    }
+
+    // selected model at budget 32 for the remaining analyses
+    let cand = Model::new(selected);
+    let (cand_te, _) = eval_split(trie, &cand, &data.test);
+    let d = diff(&cand_te, &ship_te);
+    println!(
+        "\nselected model, test macro difference {} (as in the main run)\n",
+        fmt_d(d.macro_d, d.macro_se)
+    );
+
+    // word overlap with the train and validation splits (any corpus)
+    let mut seen_words = std::collections::HashSet::new();
+    let mut seen_pairs = std::collections::HashSet::new();
+    for c in data.train.iter().chain(&data.val) {
+        for p in &c.pairs {
+            seen_words.insert(p.right.as_str());
+            seen_pairs.insert((p.typo.as_str(), p.right.as_str()));
+        }
+    }
+    println!("### Exploratory: word overlap between test and train/validation\n");
+    println!(
+        "| corpus | test pairs | intended word in a train/validation split | identical (typo, word) pair in one |\n|---|---|---|---|"
+    );
+    let mut ov_c: Vec<Vec<f64>> = Vec::new();
+    let mut ov_s: Vec<Vec<f64>> = Vec::new();
+    let mut no_c: Vec<Vec<f64>> = Vec::new();
+    let mut no_s: Vec<Vec<f64>> = Vec::new();
+    let mut ident_total = 0;
+    for (ci, c) in data.test.iter().enumerate() {
+        let (mut ov, mut ident) = (0, 0);
+        let (mut oc, mut os, mut nc, mut ns) = (vec![], vec![], vec![], vec![]);
+        for (pi, p) in c.pairs.iter().enumerate() {
+            let w = seen_words.contains(p.right.as_str());
+            ov += usize::from(w);
+            ident += usize::from(seen_pairs.contains(&(p.typo.as_str(), p.right.as_str())));
+            let (vc, vs) = (cand_te[ci][pi], ship_te[ci][pi]);
+            if w {
+                oc.push(vc);
+                os.push(vs);
+            } else {
+                nc.push(vc);
+                ns.push(vs);
+            }
+        }
+        ident_total += ident;
+        println!(
+            "| {} | {} | {} ({:.1}%) | {} |",
+            c.name,
+            c.pairs.len(),
+            ov,
+            100.0 * ov as f64 / c.pairs.len() as f64,
+            ident
+        );
+        ov_c.push(oc);
+        ov_s.push(os);
+        no_c.push(nc);
+        no_s.push(ns);
+    }
+    println!("\nidentical pairs in total: {ident_total}\n");
+    header(&data.test);
+    print_diff_row(
+        "selected - shipped, word in no train/validation split",
+        &diff(&no_c, &no_s),
+    );
+    print_diff_row("selected - shipped, word in one", &diff(&ov_c, &ov_s));
+
+    // clustered standard error (cluster = intended word, within a corpus)
+    let mut per: Vec<(f64, f64)> = Vec::new();
+    for (ci, c) in data.test.iter().enumerate() {
+        let n = c.pairs.len() as f64;
+        let dd: Vec<f64> = (0..c.pairs.len())
+            .map(|i| cand_te[ci][i] - ship_te[ci][i])
+            .collect();
+        let m = mean(&dd);
+        let mut sums: BTreeMap<&str, f64> = BTreeMap::new();
+        for (i, p) in c.pairs.iter().enumerate() {
+            *sums.entry(p.right.as_str()).or_default() += dd[i] - m;
+        }
+        let var: f64 = sums.values().map(|s| s * s).sum::<f64>();
+        per.push((m, var.sqrt() / n));
+    }
+    let macro_se = per.iter().map(|p| p.1 * p.1).sum::<f64>().sqrt() / per.len() as f64;
+    println!(
+        "\nclustered by intended word: per corpus SE {}; macro SE {:.4} (unclustered {:.4})\n",
+        per.iter()
+            .map(|p| format!("{:.4}", p.1))
+            .collect::<Vec<_>>()
+            .join(", "),
+        macro_se,
+        d.macro_se
+    );
+
+    // concentration of the gain on first-letter pairs
+    let cm = CostModel::qwerty();
+    let (mut tot, mut first_sum, mut first_n, mut rest_n) = (0.0, 0.0, 0usize, 0usize);
+    let (mut fcs, mut fss, mut rcs, mut rss) = (vec![], vec![], vec![], vec![]);
+    for (ci, c) in data.test.iter().enumerate() {
+        let (mut fc, mut fs_, mut rc, mut rs_) = (vec![], vec![], vec![], vec![]);
+        for (pi, p) in c.pairs.iter().enumerate() {
+            let dd = cand_te[ci][pi] - ship_te[ci][pi];
+            tot += dd;
+            if classify(&p.typo, &p.right, &cm).contains(&"first letter differs") {
+                first_sum += dd;
+                first_n += 1;
+                fc.push(cand_te[ci][pi]);
+                fs_.push(ship_te[ci][pi]);
+            } else {
+                rest_n += 1;
+                rc.push(cand_te[ci][pi]);
+                rs_.push(ship_te[ci][pi]);
+            }
+        }
+        fcs.push(fc);
+        fss.push(fs_);
+        rcs.push(rc);
+        rss.push(rs_);
+    }
+    println!("### Exploratory: first-letter concentration of the gain\n");
+    println!(
+        "first-letter pairs: {first_n} of {}; they carry {:.1}% of the pooled gain (sum of per-pair differences {:.2} of {:.2}).\n",
+        first_n + rest_n,
+        100.0 * first_sum / tot,
+        first_sum,
+        tot
+    );
+    header(&data.test);
+    print_diff_row("first letter differs", &diff(&fcs, &fss));
+    print_diff_row("first letter equal", &diff(&rcs, &rss));
+    println!(
+        "\npooled over pairs: first-letter {:+.4}, rest {:+.4}",
+        first_sum / first_n as f64,
+        (tot - first_sum) / rest_n as f64
     );
 }
