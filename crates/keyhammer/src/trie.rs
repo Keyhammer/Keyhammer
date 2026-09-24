@@ -20,6 +20,7 @@ pub const NO_TERM: u32 = u32::MAX;
 
 /// Why a trie could not be built.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BuildError {
     /// No terms were given.
     Empty,
