@@ -75,9 +75,9 @@ int main(void) {
     /* Unicode: case and diacritics are folded, hits return the original
        text and the position of the entry (ABI version 2). */
     kh_entry uni[] = {
-        ENTRY("SÃ£o Paulo", 3), /* "São Paulo" */
-        ENTRY("aÃ§Ã£o", 1), /* "ação" */
-        ENTRY("AÃÃO", 9), /* "AÇÃO": same term after folding */
+        ENTRY("S\xc3\xa3o Paulo", 3), /* "Sao Paulo" with a tilde on the a */
+        ENTRY("a\xc3\xa7\xc3\xa3o", 1), /* the same word in lower case */
+        ENTRY("A\xc3\x87\xc3\x83" "O", 9), /* upper case: same term after folding */
     };
     kh_index *uidx = NULL;
     CHECK(kh_index_build(uni, 3, &uidx) == KH_OK);
@@ -89,14 +89,14 @@ int main(void) {
         CHECK(res.len == 1 && res.hits[0].cost == 0 &&
               res.hits[0].input_index == 0);
         CHECK(res.len == 1 && res.hits[0].term_len == 10 &&
-              memcmp(res.hits[0].term, "SÃ£o Paulo", 10) == 0);
+              memcmp(res.hits[0].term, "S\xc3\xa3o Paulo", 10) == 0);
         kh_results_free(&res);
         CHECK(kh_search(uidx, (const uint8_t *)"acao", 4, NULL, &res) == KH_OK);
         CHECK(res.len == 1 && res.hits[0].input_index == 2 &&
               res.hits[0].weight == 9);
         kh_results_free(&res);
         /* Invalid UTF-8 is still an error. */
-        CHECK(kh_search(uidx, (const uint8_t *)"Ã(", 2, NULL, &res) ==
+        CHECK(kh_search(uidx, (const uint8_t *)"\xc3(", 2, NULL, &res) ==
               KH_ERR_INVALID_UTF8);
         kh_index_free(&uidx);
     }
