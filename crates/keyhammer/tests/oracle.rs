@@ -144,3 +144,72 @@ fn known_typos_rank_the_intended_word_first() {
     assert_eq!(first(b"pythno", &mut s), ("python".to_string(), 12)); // transposed "on"
     assert_eq!(first(b"ryst", &mut s), ("rust".to_string(), 8)); // 'y' typed for 'u': neighbouring keys
 }
+
+#[test]
+fn tsb_matches_the_oracle_on_tiny_alphabets() {
+    for seed in 300..325 {
+        check(seed, 3, 120, true);
+    }
+}
+
+#[test]
+fn tsb_matches_the_oracle_on_medium_alphabets() {
+    for seed in 400..420 {
+        check(seed, 8, 300, true);
+    }
+}
+
+#[test]
+fn tsb_matches_the_oracle_on_the_full_alphabet() {
+    for seed in 500..510 {
+        check(seed, 26, 400, true);
+    }
+}
+
+#[test]
+fn tsb_and_plain_bound_return_identical_hits_and_tsb_never_pushes_more_in_total() {
+    let mut rng = Rng::new(9);
+    let strings: Vec<String> = (0..2000)
+        .map(|_| String::from_utf8(random_word(&mut rng, 26)).unwrap())
+        .collect();
+    let items: Vec<(&str, u16)> = strings
+        .iter()
+        .map(|s| (s.as_str(), rng.below(65_536) as u16))
+        .collect();
+    let trie = Trie::build(&items).unwrap();
+    let cm = CostModel::qwerty();
+    let mut s = Searcher::new();
+    let (mut pushed_plain, mut pushed_tsb) = (0usize, 0usize);
+    for _ in 0..200 {
+        let q = random_word(&mut rng, 26);
+        let plain = s
+            .search(
+                &trie,
+                &cm,
+                &q,
+                &SearchConfig {
+                    tsb: false,
+                    ..SearchConfig::default()
+                },
+            )
+            .unwrap();
+        let fast = s
+            .search(
+                &trie,
+                &cm,
+                &q,
+                &SearchConfig {
+                    tsb: true,
+                    ..SearchConfig::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(plain.hits, fast.hits);
+        pushed_plain += plain.stats.nodes_pushed;
+        pushed_tsb += fast.stats.nodes_pushed;
+    }
+    assert!(
+        pushed_tsb <= pushed_plain,
+        "tsb pushed {pushed_tsb}, plain pushed {pushed_plain}"
+    );
+}
