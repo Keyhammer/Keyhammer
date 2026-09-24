@@ -44,6 +44,7 @@ export class KeyhammerError extends Error {
 }
 
 export class Index {
+  private constructor();
   /**
    * Builds an index. Throws `TypeError` or `RangeError` for invalid entries or
    * an empty dictionary, and `KeyhammerError` if the engine fails.

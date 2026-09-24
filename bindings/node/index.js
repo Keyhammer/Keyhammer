@@ -46,6 +46,18 @@ function compile() {
   return compiled;
 }
 
+// Rust's `str::trim` removes these (Unicode White_Space), which is what the
+// module applies to terms; JavaScript's `trim` differs (U+0085, U+FEFF).
+const EDGE_SPACE =
+  /^[\t\n\v\f\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]|[\t\n\v\f\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]$/;
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+function wellFormed(s) {
+  return typeof s.isWellFormed === 'function' ? s.isWellFormed() : !LONE_SURROGATE.test(s);
+}
+
+const TOKEN = Symbol('Index.build');
+
 function isU(n, max) {
   return Number.isInteger(n) && n >= 0 && n <= max;
 }
@@ -65,8 +77,14 @@ function line(entry, i) {
   if (/[\t\r\n]/.test(term)) {
     throw new RangeError(`terms[${i}]: a term must not contain a tab or a line break`);
   }
-  if (term.trim().length === 0) {
+  if (term.length === 0) {
     throw new RangeError(`terms[${i}]: a term must not be empty`);
+  }
+  if (EDGE_SPACE.test(term)) {
+    throw new RangeError(`terms[${i}]: a term must not start or end with white space`);
+  }
+  if (!wellFormed(term)) {
+    throw new TypeError(`terms[${i}]: a term must be well-formed UTF-16 (no lone surrogates)`);
   }
   if (encoder.encode(term).length > MAX_TERM_BYTES) {
     throw new RangeError(`terms[${i}]: a term is limited to ${MAX_TERM_BYTES} UTF-8 bytes`);
@@ -86,7 +104,8 @@ export class Index {
   #kh;
   #size;
 
-  constructor(kh, size) {
+  constructor(token, kh, size) {
+    if (token !== TOKEN) throw new TypeError('use Index.build');
     this.#kh = kh;
     this.#size = size;
   }
@@ -108,7 +127,7 @@ export class Index {
     const data = encoder.encode(lines.join('\n'));
     const n = withBuffer(kh, data, (ptr, len) => kh.kh_build(ptr, len)) >>> 0;
     if (n === 0) throw new KeyhammerError('the engine could not build an index from these terms');
-    return new Index(kh, n);
+    return new Index(TOKEN, kh, n);
   }
 
   /** Number of distinct terms in the index. */
@@ -131,6 +150,7 @@ export class Index {
     if (!isU(k, 0xffffffff)) throw new RangeError('k must be a non-negative integer');
     if (!isU(budget, MAX_BUDGET)) throw new RangeError(`budget must be an integer from 0 to ${MAX_BUDGET}`);
     if (!Object.hasOwn(RANKINGS, ranking)) throw new TypeError("ranking must be 'coarse' or 'exact'");
+    if (!wellFormed(query)) throw new TypeError('query must be well-formed UTF-16 (no lone surrogates)');
     const data = encoder.encode(query);
     if (data.length > MAX_QUERY_BYTES) {
       throw new RangeError(`query is limited to ${MAX_QUERY_BYTES} UTF-8 bytes`);

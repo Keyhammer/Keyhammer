@@ -75,6 +75,7 @@ jobs:
           name: keyhammer-wasm
           path: target/wasm32-unknown-unknown/wasm/keyhammer_wasm.wasm
           if-no-files-found: error
+          retention-days: 1
       # Size gate: fails if the gzipped module grows past the budget. The
       # budget is 20 KB (20480 bytes) against about 16.7 KB today; to raise it,
       # change WASM_GZIP_BUDGET below in a pull request that says why. The

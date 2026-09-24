@@ -2,7 +2,6 @@
 **/target/
 .idea/
 node_modules/
-*.node
 bench/data/
 bench/node_modules/
 /website/build/

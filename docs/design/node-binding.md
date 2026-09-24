@@ -11,7 +11,7 @@ build (`bindings/wasm`). There is no new Rust crate and no native addon.
 ## Options
 
 **A. napi-rs addon over the core.** A new `cdylib` crate depending on `napi` and
-`napi-derive`, with `unsafe` confined to the napi boundary, and prebuilt
+`napi-derive`, with the napi boundary the only place that needs care, and prebuilt
 binaries.
 
 **B. Wasm as the package** (chosen). `bindings/node/index.js` instantiates
@@ -24,10 +24,10 @@ Measured in this repository:
 | | A. napi addon | B. wasm package |
 | --- | --- | --- |
 | Artifacts to ship | one binary per platform and libc, each a separate npm package chosen through `optionalDependencies` (the napi-rs convention; at least Windows x64, macOS arm64 and x64, Linux x64 glibc, and more for musl and arm64) | one file, `keyhammer.wasm`, 39 218 bytes (16 896 gzip) |
-| Published package | not built; size of a `.node` binary not measured (hypothesis: hundreds of KB to MB) | `npm pack`: 20 692 bytes tarball, 48 256 bytes unpacked (README.md, index.js, index.d.ts, keyhammer.wasm, package.json) |
-| Install-time steps | none if a prebuilt matches; a Rust toolchain if not | none on any platform Node supports |
+| Published package | not built; size of a `.node` binary not measured (hypothesis: hundreds of KB to MB) | `npm pack` (Linux checkout): 20 692 bytes tarball, 48 256 bytes unpacked (README.md, index.js, index.d.ts, keyhammer.wasm, package.json) |
+| Install-time steps | none if a prebuilt matches; otherwise the package fails to load (unless a source-build fallback is added, which needs a Rust toolchain) | none on any platform Node supports |
 | CI to test three platforms | build matrix of 3 or more targets (cross-compilation for arm64 and musl), then test each | build once on Linux, run the same file on ubuntu, macos and windows (the `node` job) |
-| `unsafe` | required at the napi boundary (new unsafe surface, new dependency tree: `napi`, `napi-derive`, `napi-build`, and the `@napi-rs/cli` toolchain) | none in the package; the existing wasm crate already has the audited raw-pointer boundary |
+| `unsafe` | napi-rs user code is safe Rust, but the `#[napi]` macros expand to `unsafe` code, which conflicts with the workspace's `unsafe_code = "forbid"` (the crate would need its own lint setting), plus a new dependency tree: `napi`, `napi-derive`, `napi-build` and the `@napi-rs/cli` toolchain | none in the package; the existing wasm crate already has the audited raw-pointer boundary |
 | Dependencies | Rust and npm dependencies to vet; `deny.toml` covers only the root workspace (#54) | none |
 | Also runs in | Node only | Node; the wasm module itself is not Node specific (only the file loader in `index.js` is), but it was not tested elsewhere here |
 
@@ -52,7 +52,7 @@ would prefer; both are sub-millisecond per query at every size measured.
 
 Fewest moving parts that meet the acceptance criteria: the cost of A is a
 platform matrix, a second publishing pipeline and new `unsafe` and dependencies,
-for a speed-up that is at most about 2.2 times on queries that already take 0.2
+for a speed-up of at most about 2.2 times (a cross-harness estimate, see above) on queries that already take 0.2
 to 0.5 ms. B ships one file that is byte-identical on every platform, so testing
 it on the three operating systems tests what users get. The costs of B are
 accepted openly: slower than native by the factor above; each index owns a
@@ -63,6 +63,14 @@ checks arguments and the dictionary before the call.
 
 Revisit A if a user needs the native speed. The API below is deliberately small
 so that a native implementation could keep it.
+
+## Node versions
+
+`engines` stays `>=18` and CI tests Node 18 and 22: the code uses only features
+available in 18 (private fields, `Object.hasOwn`, lookbehind), Node 18 is what
+older deployments still run, and the extra matrix entries cost about 15 seconds
+each. Node 18 is past its upstream end of life; drop it from `engines` and CI
+together when that stops being useful.
 
 ## API
 

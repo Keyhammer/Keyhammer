@@ -134,3 +134,26 @@ test('the module carries no build-machine path', () => {
   const leaking = strings.filter((s) => /[A-Za-z]:\\|\/Users\/|\/home\/|\/c\/Users/.test(s));
   assert.deepEqual(leaking, []);
 });
+
+test('the constructor is private', () => {
+  assert.throws(() => new Index(), TypeError);
+  assert.throws(() => new Index({}, {}, 1), TypeError);
+});
+
+test('surrounding white space is rejected, not trimmed', () => {
+  for (const bad of [' foo', 'foo ', '\u0085', '\u00a0a', 'a\u3000', ' ']) {
+    assert.throws(() => Index.build([bad]), RangeError, JSON.stringify(bad));
+  }
+  assert.throws(() => Index.build(['\u0085', 'a']), RangeError);
+  assert.equal(Index.build(['a b']).size, 1);
+  assert.equal(Index.build(['\uFEFFa']).size, 1); // not white space for the engine
+});
+
+test('lone surrogates are rejected, pairs are kept', () => {
+  for (const bad of ['a\ud800', '\udc00a', 'a\ud800b']) {
+    assert.throws(() => Index.build([bad]), TypeError);
+    assert.throws(() => Index.build(['ok']).search(bad), TypeError);
+  }
+  assert.equal(Index.build(['a\u{1F600}']).size, 1);
+  assert.doesNotThrow(() => Index.build(['ok']).search('a\u{1F600}'));
+});
