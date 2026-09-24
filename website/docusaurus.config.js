@@ -52,6 +52,7 @@ const config = {
         items: [
           { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs' },
           { href: apiHref, label: 'API reference', position: 'left' },
+          { to: '/demo', label: 'Demo', position: 'left' },
           { href: 'https://github.com/Keyhammer/Keyhammer', label: 'GitHub', position: 'right' },
         ],
       },
