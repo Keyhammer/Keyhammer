@@ -35,6 +35,10 @@ Keyhammer is an **unpublished M0 prototype**. Please read the
   verbatim. Unicode and case folding are not implemented yet.
 - Nothing is published to crates.io or npm, and the API is unstable.
 
+You can try the engine in your browser on the [live demo](/demo) page, which
+runs the core compiled to WebAssembly on a small sample dictionary or on terms
+you paste.
+
 ## Quick example
 
 This is the example from the crate documentation, which is compiled and run as
