@@ -163,3 +163,66 @@ fn prefix_matches_the_oracle() {
         fuzz_props::prefix_oracle_equality,
     );
 }
+
+/// Characters that stress the normaliser: every folded block, the specials,
+/// combining marks, joiners, bidirectional marks, emoji, NUL, the ends of the
+/// scalar range.
+const TRICKY: &[char] = &[
+    'a',
+    'Z',
+    'ß',
+    'İ',
+    'ı',
+    'ŉ',
+    'ſ',
+    'µ',
+    'Æ',
+    'œ',
+    'Ç',
+    'ã',
+    'é',
+    'Ÿ',
+    'ÿ',
+    '×',
+    'ĸ',
+    'ﬁ',
+    'ﬃ',
+    'ﬆ',
+    '\u{300}',
+    '\u{301}',
+    '\u{307}',
+    '\u{36F}',
+    '\u{370}',
+    '\u{200D}',
+    '\u{200F}',
+    '\u{202E}',
+    '\u{FEFF}',
+    '\u{0}',
+    '😀',
+    '👩',
+    '\u{1F3FD}',
+    'Ω',
+    'Я',
+    'ع',
+    '\u{FFFD}',
+    '\u{FFFF}',
+    '\u{10FFFF}',
+    ' ',
+    '\u{2BC}',
+    '\u{3BC}',
+];
+
+fn tricky(rng: &mut Rng) -> Vec<u8> {
+    let mut d = vec![rng.below(20) as u8, rng.below(20) as u8];
+    let mut s = String::new();
+    for _ in 0..rng.below(16) {
+        s.push(TRICKY[rng.below(TRICKY.len() as u64) as usize]);
+    }
+    d.extend(s.as_bytes());
+    d
+}
+
+#[test]
+fn normalize_is_idempotent_and_maps_stay_in_range() {
+    run(5, 4_000, tricky, fuzz_props::normalize);
+}

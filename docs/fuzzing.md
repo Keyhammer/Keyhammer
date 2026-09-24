@@ -11,6 +11,7 @@ its CI need neither nightly nor libFuzzer.
 | `oracle_equality` | On small inputs, hits equal a brute-force reference (`tests/support`), for `tsb` on and off and both rankings. |
 | `tsb_equivalence` | Results with `tsb: true` equal those with `tsb: false`. |
 | `prefix_oracle_equality` | `search_prefix` hits equal a brute-force prefix reference (minimum over all term prefixes), for `tsb` on and off and both rankings; a node-limited run returns true costs. |
+| `normalize` | `text::Normalizer` on any `&str` (combining marks, joiners, bidirectional marks, emoji, NUL included), in all four modes, never panics, is deterministic and idempotent, and its source map stays monotone and in range and converts to valid byte and UTF-16 ranges. |
 
 Input layouts are documented in `crates/keyhammer/tests/fuzz_props/mod.rs`, which
 holds the properties themselves.
@@ -24,6 +25,7 @@ cargo +nightly fuzz run never_panics -- -max_total_time=60
 cargo +nightly fuzz run oracle_equality
 cargo +nightly fuzz run tsb_equivalence
 cargo +nightly fuzz run prefix_oracle_equality
+cargo +nightly fuzz run normalize
 ```
 
 libFuzzer works best on Linux and macOS; on Windows use WSL. Corpora and crash

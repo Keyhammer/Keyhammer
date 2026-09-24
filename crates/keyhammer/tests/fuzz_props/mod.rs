@@ -11,6 +11,7 @@
 use crate::support::{oracle_cost, oracle_topk};
 use keyhammer::cost::{CostModel, Layout};
 use keyhammer::search::{Ranking, SearchConfig, Searcher};
+use keyhammer::text::{self, Normalizer, SourceMap};
 use keyhammer::trie::Trie;
 
 /// Sequential reader over the fuzz input; reads past the end return 0.
@@ -256,6 +257,53 @@ pub fn prefix_oracle_equality(data: &[u8]) {
                     "untruncated limited run, q={q:?} terms={terms:?}"
                 );
             }
+        }
+    }
+}
+
+/// The four normaliser modes.
+const MODES: [Normalizer; 4] = [
+    Normalizer::new(),
+    Normalizer::new().with_diacritic_folding(false),
+    Normalizer::new().with_case_folding(false),
+    Normalizer::new()
+        .with_case_folding(false)
+        .with_diacritic_folding(false),
+];
+
+/// Layout: `[a, b]` then any bytes, lossily decoded as UTF-8 (so any `&str`,
+/// with U+FFFD for invalid sequences). In every mode, normalising must not
+/// panic, must be deterministic and idempotent, and the source map must be
+/// monotone, in range and convertible to byte and UTF-16 ranges of the
+/// source; the output range `a..b` (clamped) must map to a valid range too.
+pub fn normalize(data: &[u8]) {
+    let mut c = Cursor(data);
+    let (a, b) = (usize::from(c.u8()), usize::from(c.u8()));
+    let s = String::from_utf8_lossy(c.0);
+    let src_len = s.chars().count();
+    for n in MODES {
+        let out = n.normalize(&s);
+        assert_eq!(n.normalize(&out), out, "not idempotent: {s:?} -> {out:?}");
+        assert_eq!(n.normalize(&s), out);
+        let mut map = SourceMap::new();
+        assert_eq!(n.normalize_mapped(&s, &mut map), out);
+        assert_eq!(map.len(), out.chars().count());
+        assert_eq!(map.source_len(), src_len);
+        let mut prev = 0;
+        for i in 0..map.len() {
+            let f = map.source_of(i).unwrap();
+            assert!(f >= prev && f < src_len);
+            prev = f;
+        }
+        let (a, b) = (a.min(map.len()), b.min(map.len()));
+        let (a, b) = (a.min(b), a.max(b));
+        for r in [0..map.len(), a..b] {
+            let src = map.to_source(r).unwrap();
+            assert!(src.start <= src.end && src.end <= src_len);
+            let bytes = text::utf8_range(&s, src.clone()).unwrap();
+            assert!(s.get(bytes).is_some());
+            let units = text::utf16_range(&s, src).unwrap();
+            assert!(units.end <= s.encode_utf16().count());
         }
     }
 }

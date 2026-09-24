@@ -45,3 +45,10 @@ path = "fuzz_targets/prefix_oracle_equality.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "normalize"
+path = "fuzz_targets/normalize.rs"
+test = false
+doc = false
+bench = false
