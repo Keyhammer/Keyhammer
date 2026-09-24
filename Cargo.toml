@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["legacy", "crates/keyhammer", "bench"]
+members = ["legacy", "crates/keyhammer", "bench", "bindings/wasm"]
 exclude = ["crates/node"]
 
 [workspace.lints.rust]
@@ -10,3 +10,14 @@ missing_docs = "warn"
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+
+# Size-oriented profile for the WebAssembly build (bindings/wasm). It is kept
+# separate so that `release`, which the benchmarks use, is not affected:
+#   cargo build -p keyhammer-wasm --target wasm32-unknown-unknown --profile wasm
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
