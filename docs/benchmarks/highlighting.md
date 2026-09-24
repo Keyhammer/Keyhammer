@@ -26,6 +26,13 @@ traceback uses the same cost code, `docs/design/highlighting.md` section 7) chan
   which returned the four candidates in an array, was measured 6% to 9% slower on every row and
   was replaced by a visitor function before this change; see "The refactor" below.
 
+- **WebAssembly size**: 18 177 bytes gzip -9 on `main`, 18 217 on the branch (+40 bytes; budget
+  20 480). The binding does not call highlighting, so its code is not in the module; the delta
+  is the reshaped search cell. Measured as in `unicode.md` (`--profile wasm`, `gzip -9 -n`,
+  without the CI's path remapping).
+- `no_std`: the `wasm32-unknown-unknown` and `thumbv7em-none-eabihf` builds pass; no dependency
+  was added.
+
 ## Method
 
 - Machine: one Windows 11 PC, shared with other agents. Processor load sampled before the timed
