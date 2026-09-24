@@ -280,6 +280,9 @@ fn main() {
             "  (c') no evidence of being worse (need diff + {Z95} SE >= 0: {m:+.4} + {Z95} x {se:.4} = {hi:+.4}): {}",
             if hi >= 0.0 { "PASS" } else { "FAIL" }
         );
+        println!(
+            "G0 under the original criteria remains a partial pass: speed passes, the strict MRR check (c) fails at 100000 and 274137 words. (c') is informational: it says only that these data do not show the new ranking to be worse than the baseline; it does not by itself pass G0, and any non-inferiority margin for a future run should be fixed in advance."
+        );
         println!("oracle equality: run `cargo test -p keyhammer` (must be green)");
     }
 }
