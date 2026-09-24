@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `bindings/node`: a Node.js package for the new engine, plain JavaScript over the
+  WebAssembly build (`Index.build`, `index.search` with `k`, `budget` and `ranking`,
+  TypeScript types, argument errors); tested by a CI job on ubuntu, macos and windows
+  with Node 18 and 22. Nothing is published. The choice against a native addon is in
+  `docs/design/node-binding.md`.
 - Fuzz targets (`crates/keyhammer/fuzz`, cargo-fuzz) for build and search
   robustness, brute-force oracle equality and `tsb` on/off equivalence, a
   weekly `fuzz` workflow, and a deterministic `tests/fuzz_like.rs` running the
@@ -37,6 +42,10 @@ All notable changes to this project are documented here. The format follows
   wrapping when given more than `u32::MAX` terms.
 - `docs/design/lower-bound.md`: a written proof that the search's lower bound
   is admissible, with what the tests check and what is only argued.
+
+### Removed
+- `crates/node`, the Node binding of the legacy engine; `bench/compare.mjs` now
+  loads `bindings/node` and so runs the new engine.
 
 ### Changed
 - The M0 harness (`bench/src/bin/m0.rs`) now exits with status 1 when a gate
