@@ -7,6 +7,8 @@ Thanks for your interest in Keyhammer.
 Every commit must be signed off (`git commit -s`), certifying the
 [Developer Certificate of Origin 1.1](https://developercertificate.org/):
 you wrote the code or have the right to submit it under this project's license.
+The DCO CI check intentionally skips pull requests opened by bot accounts
+(for example Dependabot), which cannot sign off.
 
 ## License of contributions
 

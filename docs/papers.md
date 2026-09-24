@@ -29,10 +29,9 @@ Corrections to how these references had been summarised in earlier project notes
   maximum weight of the subtree. The paper does not do that; it is about
   error-tolerant autocompletion under a threshold. The per-node maximum score
   with best-first expansion comes from **Hsu & Ottaviano 2013**.
-- **Wobbrock & Myers 2006** was cited for a higher cost on the first character
-  (and the README cites it for a "positional error weight"). The paper is
-  about error classification in text-entry experiments; we did not find
-  either claim in it. Until another source is found, the first-character
+- **Wobbrock & Myers 2006** was cited for a higher cost on the first character.
+  The paper is about error classification in text-entry experiments; we did
+  not find that claim in it, nor any positional error weight. Until another source is found, the first-character
   multiplier is our own tuning choice, not a published result.
 - **Hyyrö 2003**: the content matches the 2002 Prague Stringology Conference
   version; the 2003 journal details could not be opened.

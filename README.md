@@ -1,151 +1,133 @@
-# keyhammer
+# Keyhammer
 
-> **Status:** under active rewrite (Keyhammer 2). The numbers below describe the legacy engine.
+Typo-tolerant top-k search over a compact trie, with keyboard-aware edit costs.
 
-Fuzzy string search that knows how humans make typos. 100x faster than FuseJS.
+[![CI](https://github.com/Keyhammer/Keyhammer/actions/workflows/ci.yml/badge.svg)](https://github.com/Keyhammer/Keyhammer/actions/workflows/ci.yml)
+License: [AGPL-3.0-or-later](LICENSE)
 
-## The problem
+## Status
 
-Every app with a search bar needs to handle typos. The standard solution (FuseJS) scans every term on every query. At 10k terms it takes 36ms per query — on mobile, the UI stutters.
+Early prototype. Nothing is published to crates.io or npm, and the API is
+unstable. The new engine is much faster than the previous one, but its ranking
+quality is currently below a simple "edit distance plus frequency" baseline.
+See [`docs/benchmarks/m0.md`](docs/benchmarks/m0.md).
 
-keyhammer finds matches in microseconds, not milliseconds. And it ranks results by how likely the query is a real typo.
+## What it is
 
-## Benchmarks (vs FuseJS, same process, same data)
+Given a dictionary of terms with frequency weights, Keyhammer returns the top-k
+terms closest to a mistyped query. Edit costs depend on the keyboard: hitting a
+neighbouring key is cheaper than an arbitrary substitution. The core crate is
+`no_std` (it needs `alloc`), uses `forbid(unsafe_code)` and has zero
+dependencies. Queries and terms are lowercased bytes for now.
 
-10,000 terms, single query:
+## How it works
 
-| Typo type | FuseJS | keyhammer | Speedup | Both find? |
-|-----------|--------|-----------|---------|------------|
-| Substitution | 36.7ms | 345µs | **106x** | ✓✓ |
-| Transposition | 35.8ms | 350µs | **102x** | ✓✓ |
-| Deletion | 29.7ms | 285µs | **104x** | ✓✓ |
-| Insertion | 38.1ms | 369µs | **103x** | ✓✓ |
-| Adjacent key | 36.6ms | 348µs | **105x** | ✓✓ |
-| Mixed case | 36.0ms | 347µs | **104x** | ✓✓ |
-| Double error | 29.8ms | 296µs | **101x** | ✓✓ |
-| Miss (no match) | 27.1ms | 187µs | **145x** | — |
+- Terms are stored in a compact trie built once from the dictionary.
+- Each trie node holds one weighted edit-distance row, computed in a narrow
+  band around the diagonal.
+- The search is exact best-first top-k: nodes are expanded in order of their
+  lower bound, and an oracle test checks the results against brute force.
+- An optional subtree signature bound (each node keeps the length range and a
+  letter mask of the terms below it) prunes subtrees that cannot improve the
+  result. On the benchmark data it expands about a third fewer nodes with the
+  same results. Its ingredients are already published; see
+  [`docs/papers.md`](docs/papers.md).
 
-Throughput: **3,988 queries/sec** vs FuseJS 39 q/s (**102x**).
-
-## Features
-
-Everything FuseJS has, plus more:
-
-- **Fuzzy search** with substitution, transposition, deletion, insertion handling
-- **Case insensitive** by default
-- **Typo-aware scoring** — adjacent key errors score higher than random substitutions
-- **Match highlighting** — character ranges for UI highlighting
-- **Multi-field search** with weighted keys (`DocumentIndex`)
-- **Extended search** — `=exact`, `^prefix`, `suffix$`, `!exclude` operators
-- **Logical queries** — AND (space) and OR (`|`) operators
-- **Dynamic add/remove** — update index without rebuild
-- **Threshold filtering** — minimum score cutoff
-- **Diacritics handling** — café → cafe, naïve → naive
-- **Keyboard layouts** — QWERTY (default), AZERTY, QWERTZ
-- **Export/import** — serialize and reconstruct the index
-- **Custom sort** — user-provided comparator
-- **Field-length normalization** — shorter terms score slightly higher
-
-Unique to keyhammer (no other lib has these):
-
-- **Confusion-aware tree pruning** — skips tree branches where the mismatch is an implausible typo
-- **Character frequency fingerprints** — detects deletions/insertions without generating variants
-- **Typo-optimal encoding** — character codes where XOR bit distance = typo probability
-- **Columnar term storage** — cache-friendly layout for brute force scans
-- **Lazy CGL tree** — demand-driven construction, only builds what queries need
-
-## Usage (Rust)
+## Quick start
 
 ```rust
-use keyhammer::FuzzyIndex;
+use keyhammer::cost::CostModel;
+use keyhammer::search::{SearchConfig, Searcher};
+use keyhammer::trie::Trie;
 
-let terms = vec!["JavaScript", "TypeScript", "Python", "Rust"];
-let index = FuzzyIndex::build(&terms, 2).unwrap();
+let trie = Trie::build(&[
+    ("javascript", 10),
+    ("typescript", 10),
+    ("python", 10),
+    ("rust", 10),
+    ("java", 10),
+])
+.unwrap();
+let costs = CostModel::qwerty();
+let mut searcher = Searcher::new();
 
-let results = index.search("javasript", 5).unwrap();
-assert_eq!(results[0].term, "JavaScript");
-// results[0].match_ranges → [(0,4), (5,10)] for highlighting
-```
-
-### Multi-field search
-
-```rust
-use keyhammer::DocumentIndex;
-
-let docs = vec![
-    vec![("name", "React"), ("category", "framework")],
-    vec![("name", "Vue"), ("category", "framework")],
-    vec![("name", "Rust"), ("category", "language")],
-];
-
-let index = DocumentIndex::builder()
-    .key("name", 2.0)       // name weighs 2x
-    .key("category", 1.0)
-    .k(2)
-    .build(&docs)
+// "javasript" skips the 'c' of "javascript".
+let out = searcher
+    .search(&trie, &costs, b"javasript", &SearchConfig::default())
     .unwrap();
-
-let results = index.search("react", 5).unwrap();
+let best = &out.hits[0];
+assert_eq!(trie.term(best.id), "javascript");
+assert_eq!(best.cost, 16);
 ```
 
-### Dynamic updates
+The same example runs as a doc test in `crates/keyhammer/src/lib.rs`.
 
-```rust
-let mut index = FuzzyIndex::build(&["hello", "world"], 2).unwrap();
-index.add("rust");
-index.remove(1); // remove "world"
-```
+## Results so far
 
-## Usage (Node.js via napi-rs)
+Rust-only, one machine, one run, 300 typo pairs (Birkbeck corpus), one English
+dictionary, provisional costs. Full dictionary of 274137 words; the baseline is
+"unit edit distance <= 2, then higher weight". Full report and caveats:
+[`docs/benchmarks/m0.md`](docs/benchmarks/m0.md).
 
-```javascript
-const { KeyhammerIndex } = require("keyhammer");
+| Engine | MRR | p95 latency (us) |
+|---|---|---|
+| legacy (previous engine) | 0.255 | 44691.7 |
+| baseline | 0.433 | 79726.6 |
+| new+tsb | 0.389 | 363.2 |
 
-const index = KeyhammerIndex.build(["JavaScript", "TypeScript", "Python"], 2);
-const results = index.search("javasript", 5);
-// results[0] = { term: "JavaScript", score: 0.48, matchRanges: [[0,4],[5,10]] }
+The p95 of the previous engine is 123.0x that of the new one. The new engine's
+MRR is lower than the baseline's at every dictionary size tested (10000,
+100000 and 274137 words).
 
-// with layout
-const fr = KeyhammerIndex.buildWithLayout(terms, 2, "azerty");
+## Repository layout
 
-// dynamic
-index.add("Rust");
-index.remove(1);
+- `crates/keyhammer`: the core crate.
+- `legacy/`: the previous engine, kept only as a benchmark reference.
+- `crates/node`: Node.js binding of the legacy engine, used by the JS comparison.
+- `bench/`: data preparation, the Rust harness and the JS comparison.
+- `docs/`: benchmark reports and prior-art notes.
 
-// threshold
-const strict = index.searchWithThreshold("javasript", 5, 0.8);
-
-// export/import
-const terms = index.export();
-const restored = KeyhammerIndex.import(terms, 2);
-```
-
-## Running
+## Development
 
 ```bash
-cargo test -p keyhammer                # core crate
-cargo test -p keyhammer-legacy         # frozen reference engine
+cargo fmt -p keyhammer -- --check
+cargo clippy -p keyhammer --all-targets -- -D warnings
+cargo test -p keyhammer
+```
 
-# JS comparison (legacy binding vs Fuse, uFuzzy, fuzzysort, MiniSearch)
-cd bench && npm install && node fetch-data.mjs && node prepare-m0-data.mjs && node compare.mjs
+Benchmarks:
 
-# Rust G0 harness (run from the repository root)
+```bash
+cd bench && npm install && node fetch-data.mjs && node prepare-m0-data.mjs
+# then, from the repository root:
 cargo run --release -p keyhammer-bench --bin m0 -- bench/data
 ```
 
-## Architecture
+The JS comparison (`node compare.mjs` in `bench/`) needs the legacy Node binding
+built first. It loads `crates/node/keyhammer.node`:
 
-Two-phase search:
+```bash
+cd crates/node && npm install && npx napi build --release --platform
+# copy the produced .node file to crates/node/keyhammer.node
+```
 
-1. **Candidate retrieval** — columnar Hamming scan + fingerprint matching for deletions/insertions. For large datasets, a lazy CGL tree ([arXiv:2604.01307](https://arxiv.org/abs/2604.01307)) supplements with sublinear Hamming search.
+## Roadmap
 
-2. **Ranking** — typo probability scorer combining positional error weight (the project's own tuning; see `docs/papers.md`), QWERTY confusion matrix (Grudin 1983), transposition detection (Damerau 1964), and bit-level encoding distance.
+- Improve ranking quality against the baseline.
+- Unicode support and more keyboard layouts.
+- Index serialization.
+- Language bindings for the new engine.
 
-## Author
+## Contributing
 
-Robson Trasel ([@RobsonTrasel](https://github.com/RobsonTrasel))
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-AGPL-3.0-or-later. See [LICENSE](LICENSE). Earlier commits, published before the
-relicense commit ("chore: relicense to AGPL-3.0-or-later"), were released under MIT.
+`AGPL-3.0-or-later`, see [LICENSE](LICENSE). Earlier commits, published before
+the relicense commit ("chore: relicense to AGPL-3.0-or-later"), were released
+under MIT.
+
+## References
+
+See [`docs/papers.md`](docs/papers.md).
