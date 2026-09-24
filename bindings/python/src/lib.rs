@@ -12,9 +12,10 @@
 //! (add/remove) and no serialisation yet, so neither does this binding.
 //!
 //! Terms and queries must be ASCII. ASCII letters are lower-cased (as in the
-//! WebAssembly binding); other ASCII bytes are compared verbatim by the core.
-//! Non-ASCII text is refused rather than compared byte by byte, because
-//! Unicode support is not in the core yet.
+//! WebAssembly binding); other ASCII characters are compared as they are by
+//! the core. The core compares code points and can fold case and diacritics
+//! (`keyhammer::text`), but this binding refuses non-ASCII text until it uses
+//! that folding (issue #67).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -240,7 +241,8 @@ impl SearchResult {
     }
 }
 
-/// Checks ASCII and lower-cases; the core compares other bytes verbatim.
+/// Checks ASCII (non-ASCII is refused until issue #67) and lower-cases ASCII
+/// letters; the core compares other characters as they are.
 fn normalise(what: &str, s: &str) -> Result<String, String> {
     if !s.is_ascii() {
         return Err(format!(

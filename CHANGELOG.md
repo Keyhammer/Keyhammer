@@ -12,7 +12,7 @@ All notable changes to this project are documented here. The format follows
   UTF-8 becomes a symbol that matches no term), so `é` against `e` is one substitution, not two
   edits. ASCII results, costs, term ids, `input_index`, trie shape and `Stats` are unchanged,
   pinned by `tests/ascii_regression.rs` (digests recorded on the byte engine) and by identical node
-  counts on the M0 data (`docs/benchmarks/unicode.md`). `Trie::label` returns a `char`;
+  counts on the M0 data (`docs/benchmarks/unicode.md`). `Trie::label` returns a `char` (migrate with `u32::from(label)`, or `label as u8` for ASCII);
   `MAX_QUERY_LEN` and `SearchError::QueryTooLong::len` count code points; `cost::class` changed for
   bytes 128-255 (now Latin-1 code points, see `cost::symbol_class`); `CostModel::sub_cost`,
   `ins_cost` and `del_cost` are generic (`u8`, `char` and `u32` symbols; an untyped integer literal

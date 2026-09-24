@@ -23,7 +23,7 @@
 //!   the number of distinct terms loaded (duplicates keep the highest
 //!   weight), or 0 on failure, in which case there is no index any more.
 //! - [`kh_search`]: runs a search; returns the number of hits, or `u32::MAX`
-//!   on error (no index, query longer than 128 bytes, budget too large,
+//!   on error (no index, query longer than 128 code points, budget too large,
 //!   unknown ranking, invalid UTF-8).
 //! - [`kh_results_ptr`] / [`kh_results_len`]: the text of the last search, in
 //!   UTF-8. The first line is a header, `nodes_expanded TAB truncated` (the

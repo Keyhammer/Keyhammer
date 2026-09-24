@@ -122,6 +122,16 @@ Consequences, by language (default normaliser):
 - Only the combining marks U+0300-U+036F are dropped. There is no NFC or NFD: with
   diacritic folding off, a precomposed `é` and `e` + U+0301 are different strings. With it
   on (the default) both become `e`, so decomposed input is handled in the common case.
+- The marks are dropped after **any** base character, not only after Latin letters, while
+  precomposed letters outside the two blocks are left alone. So the two spellings of a
+  letter of another script can come out different: decomposed Cyrillic `й` (`и` + U+0306)
+  becomes `и`, but precomposed `й` (U+0439) stays `й`. Vietnamese is affected the same way
+  (precomposed `ệ` U+1EC7 is kept, `e` + U+0323 + U+0302 becomes `e`). Normalising the input
+  to NFC before indexing avoids the mismatch; the core has no NFC (see above).
+- Not folded either (they are outside the tables or not letters): the ordinal indicators `ª`
+  and `º`, the superscripts `¹ ² ³`, the no-break space U+00A0 (it is not a space for the
+  engine), and capital sharp s `ẞ` (U+1E9E, Latin Extended Additional; lowercase `ß` does
+  fold to `ss`).
 - No removal of invisible characters (soft hyphen, ZWJ, ZWNJ, bidi marks, BOM): they stay
   symbols and cost an edit if the other side lacks them. Emoji sequences are symbols like
   any other.
