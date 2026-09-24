@@ -11,7 +11,9 @@
 //! repeated with a growing `k` until every term with at most the 10th hit's
 //! whole units has been returned, and those are reordered. The core crate is
 //! not touched. A self-check compares the result with `Ranking::Exact` and a
-//! very large `k`, sorted by the variant key, on every query.
+//! very large `k`, sorted by the variant key, on every query. It shows that the
+//! expansion returns every candidate the variant needs (the key itself is the
+//! same code on both routes).
 //!
 //! Run: `cargo run --release -p keyhammer-bench --bin tiebreak -- bench/data`
 //! after `node bench/fetch-typo-corpora.mjs --holdout`.
@@ -204,8 +206,9 @@ impl Searchers<'_> {
         }
     }
 
-    /// Independent route: `Ranking::Exact`, all terms within budget, sorted by
-    /// the variant key with the term id last.
+    /// Second route for the self-check: `Ranking::Exact`, all terms within
+    /// budget, sorted by the same variant key with the term id last. It checks
+    /// the candidate set of the expansion, not the key (shared code).
     fn variant_by_exact(&mut self, q: &[u8]) -> Vec<u32> {
         let cfg = SearchConfig {
             k: 1 << 20,
@@ -331,7 +334,7 @@ fn main() {
             let mut v = all.clone();
             v.sort_by_key(|h| (vkey(h), h.id));
             v.truncate(TOP);
-            // self-check against the independent Ranking::Exact route
+            // self-check: candidate set of the expansion vs the Ranking::Exact route (same key code)
             let ids: Vec<u32> = v.iter().map(|h| h.id).collect();
             if ids != se.variant_by_exact(typo.as_bytes()) {
                 mismatches += 1;

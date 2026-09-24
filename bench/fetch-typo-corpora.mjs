@@ -341,7 +341,7 @@ function sample(pairs, name) {
 }
 
 // Disjoint holdout: usable pairs not in the 1000-pair sample and whose typo string
-// is not the typo of a sampled pair, in sorted order, shuffled with HOLDOUT_SEED.
+// is not the typo of a sampled pair, in the order the first shuffle left them, shuffled again with HOLDOUT_SEED.
 // gtc keeps HOLDOUT_GTC pairs; wiki keeps all that remain.
 const EXPECTED_HOLDOUT = {
   gtc: "1508e677ef3d626a0bcd5317d8a7628a0950fe7f9a3b23f6bb213606078182c0",

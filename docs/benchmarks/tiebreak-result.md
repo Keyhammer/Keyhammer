@@ -7,7 +7,7 @@ Deterministic quantities only (MRR, tie counts), so one run is the result; no la
 ## What was run
 
 - Harness: `bench/src/bin/tiebreak.rs`, run as `cargo run --release -p keyhammer-bench --bin tiebreak -- bench/data`, after `node bench/fetch-typo-corpora.mjs --holdout` (data is not committed). It takes about 10 s.
-- Samples as pre-registered: `gtc-holdout.tsv` (2000 pairs, seed 20260943, disjoint from the 1000-pair `gtc.tsv`) and `wiki-holdout.tsv` (2754 pairs, all usable pairs not in `wiki.tsv`), 4754 pooled. The script reproduced the recorded SHA-256 of the two old samples and of the two new files. The assumption that the samples of issue #40 are `gtc.tsv` and `wiki.tsv` could not be checked (that experiment is not in the repository).
+- Samples as pre-registered: `gtc-holdout.tsv` (2000 pairs, seed 20260943, disjoint from the 1000-pair `gtc.tsv`) and `wiki-holdout.tsv` (2754 pairs, all usable pairs not in `wiki.tsv`), 4754 pooled. The script reproduced the recorded SHA-256 of the two old samples and of the two new files. The assumption that the samples of issue #40 are `gtc.tsv` and `wiki.tsv` could not be checked (that experiment is not in the repository). Disjointness is per corpus, as pre-registered: 46 holdout pairs also occur in the other corpus's old sample (so in the #40 data) and 68 pairs occur in both holdouts (counted twice in the pooled sample). Excluding these 114 (exploratory, not pre-registered) gives +0.0031 [+0.0013, +0.0048] and the same two category losses (missing letter -0.0035, extra letter -0.0030); the verdict is unchanged. The holdout-generation code was committed with the harness, after the pre-registration; the pre-registered SHA-256 pins its output.
 - Variant: whole units, then higher weight, then exact cost, then term id, computed in the bench from the default search (k doubled until every term with at most the 10th hit's units is returned, then reordered). Self-check against `Ranking::Exact` with all terms within budget, sorted by the variant key: 0 mismatches over 4754 queries at each of the three sizes. No search reached `max_nodes` (0 truncated at k = 10 and in the expansion).
 - The definitions of categories and ties are those of the pre-registration; nothing was added after the run except this prose.
 
@@ -100,15 +100,15 @@ Readings, at 274 137 words, pooled:
 
 - In 69.9% of queries (3323 of 4754) the default's top 10 contains at least two hits whose order is decided only by the term id; in 64.6% one of those ties involves weight-0 words, against 13.7% for ties among words with weight above 0.
 - The correct word sits in such a tie in 6.8% of queries (324), in a weight-0 tie in 6.1% (291); in 0.4% (19) the correct word misses the top 10 because of an id-only tie at rank 10.
-- 23.5% of the correct words of the samples have weight 0 in the full dictionary (1117 of 4754), so for about a quarter of queries no frequency information could decide. Whether a real frequency prior would help was not tested; this only shows how often the weight does not decide. Any reading that a better prior would raise MRR is a hypothesis.
+- 23.5% of the correct words of the samples have weight 0 in the full dictionary (1117 of 4754), so for about a quarter of queries the dictionary gives the correct word no frequency information. Whether a real frequency prior would help was not tested; this only shows how often the weight does not decide. Any reading that a better prior would raise MRR is a hypothesis.
 - The exact-cost tie-break resolves only some of the id-only ties: 62.1% of queries still have one after it, against 69.9%.
 
 ## Caveats
 
 - One dictionary family (the M0 English list, weights as in that file), one cost model, two corpora, one run. The Wikipedia list is curated common misspellings.
-- Pairs are treated as independent; several pairs share a correct word, so the standard errors are somewhat optimistic.
+- Pairs are treated as independent (4754 pairs, 3345 distinct correct words); pairs sharing a correct word are correlated (max 21 per word), so the standard errors are optimistic.
 - The gain, +0.0030, is small; the pre-registered rule asks for no significant loss anywhere, and that is what failed.
-- The self-check shows the variant is what it says it is, but it is a bench-side reordering, not an engine change; adopting it would need a native tie key in `search.rs`, and a ranking option with its oracle test.
+- The self-check shows the bench-side expansion returns every candidate the variant needs (the key itself is the same code on both routes). The variant is a bench-side reordering, not an engine change; adopting it would need a native tie key in `search.rs`, and a ranking option with its oracle test.
 
 ## Reproduce
 
