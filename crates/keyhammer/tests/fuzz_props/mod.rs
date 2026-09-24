@@ -101,7 +101,8 @@ pub fn oracle_equality(data: &[u8]) {
         .filter(|t| !t.is_empty())
         .map(|t| t.iter().take(10).map(fold).map(char::from).collect())
         .collect();
-    let mut w = Cursor(&[flags, k as u8, 7, 3]);
+    let wbytes = [flags, k as u8, 7, 3];
+    let mut w = Cursor(&wbytes);
     let Some(trie) = build(&terms, &mut w) else {
         return;
     };
@@ -138,7 +139,8 @@ pub fn tsb_equivalence(data: &[u8]) {
     let qlen = usize::from(c.u8() % 129).min(c.0.len());
     let (q, rest) = c.0.split_at(qlen);
     let terms = split_terms(rest, 200);
-    let mut w = Cursor(&[flags, 9, 9, 9]);
+    let wbytes = [flags, 9, 9, 9];
+    let mut w = Cursor(&wbytes);
     let Some(trie) = build(&terms, &mut w) else {
         return;
     };
