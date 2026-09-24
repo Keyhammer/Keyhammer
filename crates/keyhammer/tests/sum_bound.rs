@@ -384,6 +384,7 @@ fn sweep() {
 
 /// Small, fast version of the sweep that runs in CI.
 #[test]
+#[cfg_attr(miri, ignore = "brute force; no UB surface")]
 fn the_sum_is_admissible_on_a_small_exhaustive_sweep() {
     let cm = CostModel::qwerty();
     let terms: Vec<Vec<u8>> = strings(b"as", 3)
@@ -438,4 +439,24 @@ fn a_tail_that_starts_with_a_doubled_deletion_breaks_the_cell_claim_but_not_the_
     for mode in [Mode::Max, Mode::Sum] {
         assert!(check(&cm, &refs, q, 32, mode, None).is_none());
     }
+}
+
+/// The cell that would break the sum under a cheaper non-doubled indel (12):
+/// with the real table the sum is tight, not exceeded.
+#[test]
+fn the_sum_is_tight_at_the_root_of_b_and_bxy() {
+    let cm = CostModel::qwerty();
+    let (q, t): (&[u8], &[u8]) = (b"bxy", b"b");
+    let qm = qmask(q);
+    let sig = Sig {
+        len_min: 1,
+        len_max: 1,
+        below: class(b'b'),
+    };
+    // T_comp = 2 * 8 (two extra query bytes), T_let = 2 * 8 (x and y)
+    assert_eq!(terms(&cm, &qm, 3, 0, 0, &sig), (16, 16));
+    // b=b, delete x (16), delete y (16): equal to the sum. With indel = 12
+    // it would be 24 < 32 and the sum would not be admissible.
+    assert_eq!(oracle_cost(&cm, q, t), 32);
+    assert_eq!(tail(&cm, q, t, 0, 0, true), 32);
 }

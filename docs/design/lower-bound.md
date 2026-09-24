@@ -269,12 +269,15 @@ and what is tested is stated separately below.
 section 1, the proof needs that a deletion that is not discounted costs at
 least `c_indel_min + c_min`, i.e. `indel >= indel_double + c_min`. For the
 current table `16 >= 8 + 8` holds with equality, so the sum is tight there. A
-table with, say, `indel = 12` and `indel_double = 8` would break it (the query
-"xy" against an empty subtree gives `T_comp + T_let = 16 + 16 = 32` but costs
-24), while `max` would stay valid. So a sum is not valid for every cost table
-and would have to be tied to a checked constant. `CostModel` has private fields
-and only the `qwerty()` constructor, so the current table is the only one that
-can be built today.
+table with, say, `indel = 12` and `indel_double = 8` would break it
+(dictionary `{"b"}`, query `"bxy"`, root cell `(0, 0)`: `T_comp = 16`,
+`T_let = 16` (x, y), sum 32, but the path b=b, delete x, delete y would cost
+12 + 12 = 24), while `max` would stay valid. With the current table that path
+costs 16 + 16 = 32, equal to the sum (tight). So a sum is not valid for every
+cost table and would have to be tied to a checked constant. `CostModel` has
+private fields; its constructors (`qwerty()`, `for_layout(..)`) all use the same
+scalar costs (only the neighbour table differs), so the sum is admissible for
+every layout, but not for arbitrary tables.
 
 **Claim.** Let `(i, j)` be the last cell that the optimal path of `t` visits in
 row `j` (Case A). Let `S` be the cost of the rest of the path, with `a`
@@ -319,7 +322,10 @@ Hence `LB_sum(v) <= cost(t)` for every within-budget `t` below `v`.
 the claim is false: dictionary `{"a"}`, query `"aa"`, cell `(i, j) = (1, 1)`
 has `T_comp = T_let = 8`, but the doubled deletion costs 8. The node bound is
 not violated because the last cell of the path in row 1 is `(2, 1)`, where
-nothing is missing. `tests/sum_bound.rs` pins this.
+nothing is missing. `tests/sum_bound.rs` pins this. The node-level check is weak
+below the root: at depth >= 1 Case B caps the bound at `min(row j-1) + 12`,
+hiding most tail overestimates; the cell-level (last-in-row) check is what
+actually tests the proof.
 
 **Tested.** `tests/sum_bound.rs` re-implements the bound with full matrices
 (independent of the banded storage) and checks, for both `max` and the sum,

@@ -1,6 +1,6 @@
 # A summed subtree-signature bound (issue #44), 2026-09-24
 
-Verdict: **do not adopt.** Under the current `CostModel::qwerty()` the sum `T_comp + T_let` is admissible (argued in `docs/design/lower-bound.md` section 3a, and no counterexample in about 13.2 million tested cases), but it expands only 0.14% to 0.33% fewer trie nodes than `max` on the M0 data, far below the 5% threshold set for changing the core. The core is unchanged; `max` stays.
+Verdict: **do not adopt.** Under the current `CostModel::qwerty()` the sum `T_comp + T_let` is admissible (argued in `docs/design/lower-bound.md` section 3a, and no counterexample in about 13.2 million tested cases), but it expands only 0.14% to 0.33% fewer trie nodes than `max` on the M0 data, a node reduction far too small to justify a cost-table precondition (issue #44 acceptance: "an unmeasurable gain"). The core is unchanged; `max` stays.
 
 ## Questions
 
@@ -19,13 +19,13 @@ Verdict: **do not adopt.** Under the current `CostModel::qwerty()` the sum `T_co
 | alphabet `asd`: terms up to 3, queries up to 4, up to 2 terms | 660,660 | 0 | 0 | 0 |
 | random (alphabets `aqw`, `asdfqwer`, `ax`, `aab`; 1 to 6 terms of length 1 to 8; queries of length 0 to 9 or an entry with 0 to 3 edits; seed 44) | 160,000 | 0 | 0 | 0 |
 
-Budgets: 7, 15, 16, 24, 32, 48, 64 (`W = 0..8`). Cell level was checked for all cases of the four exhaustive sets and for one random round in eight. For tails that may start with a deletion, the cell-level claim does fail (24,486 random and millions of exhaustive cell violations), e.g. dictionary `{"a"}`, query `"aa"`, cell `(1, 1)`: `T_comp = T_let = 8` but the doubled-letter deletion costs 8. That is exactly the overlap the issue worried about; it does not reach the node bound, because a path's last cell in a row never starts with a deletion. `tests/sum_bound.rs` pins the example and runs a smaller exhaustive sweep in the normal test run.
+Budgets: 7, 15, 16, 24, 32, 48, 64 (`W = 0..8`). Cell level was checked for all cases of the four exhaustive sets and for one random round in eight. For tails that may start with a deletion, the cell-level claim does fail (24,486 random and millions of exhaustive cell violations), e.g. dictionary `{"a"}`, query `"aa"`, cell `(1, 1)`: `T_comp = T_let = 8` but the doubled-letter deletion costs 8. The node-level check is weak below the root: at depth >= 1 Case B caps the bound at min(row j-1) + 12, hiding most tail overestimates; the cell-level (last-in-row) check is what actually tests the proof. That is exactly the overlap the issue worried about; it does not reach the node bound, because a path's last cell in a row never starts with a deletion. `tests/sum_bound.rs` pins the example and runs a smaller exhaustive sweep in the normal test run.
 
 With the sum patched into `lower_bound` (one line, not committed), `cargo test -p keyhammer --release` passes, including the 43,200-case lower-bound test per mode, `tests/oracle.rs` and `tests/fuzz_like.rs`.
 
 **Proof.** Argued, not machine-checked, in `docs/design/lower-bound.md` section 3a. In short: with `sp`/`dp` the picked missing-class bytes consumed by substitutions/deletions, every step costs at least 8, an undiscounted deletion costs at least 16 (`indel >= indel_double + c_min`, equality in the current table), and the only discounted picked deletion can be at the first tail byte, where the tail must then start with an insertion that pays for it.
 
-**Not valid for every cost table.** The proof needs `indel >= indel_double + c_min`. With `indel = 12`, `indel_double = 8` the sum would overestimate (query "xy" against an empty subtree: bound 32, cost 24). `max` needs only the three minimum costs. `CostModel` has private fields and one constructor, so today only the current table exists, but a sum would need a checked constant. This is a second reason, besides the gain, not to change the default.
+**Not valid for every cost table.** The proof needs `indel >= indel_double + c_min`. With `indel = 12`, `indel_double = 8` the sum would overestimate (dictionary {"b"}, query "bxy", root cell (0,0): T_comp = 16, T_let = 16, sum 32, but the path b=b, delete x, delete y would cost 12 + 12 = 24; with the real table it costs 32, so the sum is tight). `max` needs only the three minimum costs. `CostModel` has private fields; its constructors (`qwerty()`, `for_layout(..)`) all use the same scalar costs (only the neighbour table differs), so the sum is admissible for every layout, but not for arbitrary tables. A sum would need a checked constant. This is a second reason, besides the gain, not to change the default.
 
 Limits: the exhaustive sets use 2 to 3 letters and dictionaries of up to 3 terms; the random set is 160,000 cases of larger alphabets. Nothing above covers queries over 10 bytes, large dictionaries, or bytes that collide modulo 64 (the proof handles collisions in argument only).
 
@@ -53,5 +53,5 @@ Node counts are deterministic, so machine load does not affect them.
 ## Verdict
 
 - Admissible under the current costs: yes (tested, and argued); not valid for every cost table.
-- Gain: 0.14% to 0.33% fewer nodes, below the 5% threshold; results identical.
+- Gain: 0.14% to 0.33% fewer nodes, too small to justify a cost-table precondition; results identical.
 - Adopt: **no.** `max` stays the bound; the sum adds a cost-table precondition for no measurable gain. Reopen only if a cost model with much larger insertion/deletion costs, where both terms are often positive, becomes a target.
