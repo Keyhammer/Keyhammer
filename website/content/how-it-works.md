@@ -21,6 +21,8 @@ deduplicated term list.
 Besides the edge label, each node stores summaries of the terms at or below it:
 the largest weight, the shortest and longest term length, and a 64-bit mask of
 the character classes seen on the edges below it (the subtree signature).
+Bytes are folded modulo 64 (`b & 63`), so different bytes can share a class;
+such collisions only loosen the bound, they never make it unsound.
 
 ## Costs are fixed point
 
@@ -81,6 +83,6 @@ given what exists below the node:
   absent from the subtree mask costs at least the cheapest edit.
 
 The larger of the two is added. The bound only prunes; it does not change the
-hits. On the M0 benchmark it expanded about a third fewer nodes; see the
-[results](/docs/results). Every ingredient is known from the literature, and
+hits. On the M0 benchmark data it reduces the nodes expanded, with identical
+results; see the [results](/docs/results) for the figures. Every ingredient is known from the literature, and
 the project claims no novelty (see [prior art](/docs/prior-art)).

@@ -51,10 +51,10 @@ export default function Home() {
         <div className="container">
           <div className={`alert alert--warning ${styles.status}`} role="note">
             <strong>Status: unpublished prototype (M0).</strong> Nothing is published to
-            crates.io or npm and the API is unstable. On the M0 benchmark the engine is much
-            faster than the previous one, but its ranking quality is currently{' '}
-            <strong>below a simple baseline</strong>. The project claims no novelty. See the{' '}
-            <Link to="/docs/results">results</Link> and the{' '}
+            crates.io or npm and the API is unstable. Speed against the previous engine and
+            ranking quality against a simple edit-distance-plus-frequency baseline are reported,
+            with their caveats, on the <Link to="/docs/results">results</Link> page. The
+            project claims no novelty. See also the{' '}
             <Link to="/docs/prior-art">prior art</Link>.
           </div>
         </div>
