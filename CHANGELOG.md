@@ -24,6 +24,12 @@ All notable changes to this project are documented here. The format follows
   test of a ranking tie-break variant on disjoint typo samples (`fetch-typo-corpora.mjs --holdout`).
   Verdict: do not adopt (+0.0030 MRR@10 at 274 137 words, but a significant loss on two error
   categories); the default ranking is unchanged.
+- `bindings/python`: a Python package (PyO3 and maturin, abi3 wheels) with
+  `Index`, `SearchConfig`, `Ranking`, errors as exceptions and type stubs.
+  ASCII only for now; no add/remove/export because the core has none yet
+  (#31, #26). A CI job builds and tests the wheel on Linux, macOS and Windows;
+  nothing is published. Its dependencies (pyo3 and maturin) are MIT OR
+  Apache-2.0; see `bindings/python/README.md`.
 - Fuzz targets (`crates/keyhammer/fuzz`, cargo-fuzz) for build and search
   robustness, brute-force oracle equality and `tsb` on/off equivalence, a
   weekly `fuzz` workflow, and a deterministic `tests/fuzz_like.rs` running the

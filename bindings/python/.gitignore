@@ -1,0 +1,9 @@
+target/
+__pycache__/
+*.pyd
+*.so
+.pytest_cache/
+.venv/
+*.pdb
+*.dll
+*.dylib

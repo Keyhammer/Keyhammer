@@ -1,0 +1,24 @@
+[package]
+name = "keyhammer-python"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Python binding (PyO3) for the Keyhammer core (unpublished prototype)"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/Keyhammer/Keyhammer"
+publish = false
+
+# Stand-alone crate outside the root workspace (see `exclude` in the root
+# Cargo.toml), with its own Cargo.lock: the root `cargo deny` and the root
+# lints do not apply to it. The workspace lints are therefore repeated in
+# src/lib.rs. The core forbids `unsafe`; this crate writes none by hand, the
+# only `unsafe` comes from PyO3's own macros and library.
+
+[lib]
+name = "_keyhammer"
+crate-type = ["cdylib"]
+
+[dependencies]
+keyhammer = { path = "../../crates/keyhammer" }
+# abi3: one wheel per platform for CPython >= 3.9 (see pyproject.toml).
+pyo3 = { version = "=0.29.2", features = ["abi3-py39", "extension-module"] }
