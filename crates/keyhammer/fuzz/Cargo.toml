@@ -1,0 +1,40 @@
+[package]
+name = "keyhammer-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+keyhammer = { path = ".." }
+
+# Its own workspace: excluded from the root one so `cargo test` and CI on the
+# main workspace never need nightly or libFuzzer.
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "never_panics"
+path = "fuzz_targets/never_panics.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "oracle_equality"
+path = "fuzz_targets/oracle_equality.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tsb_equivalence"
+path = "fuzz_targets/tsb_equivalence.rs"
+test = false
+doc = false
+bench = false

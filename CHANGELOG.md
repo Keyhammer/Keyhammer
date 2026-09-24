@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Fuzz targets (`crates/keyhammer/fuzz`, cargo-fuzz) for build and search
+  robustness, brute-force oracle equality and `tsb` on/off equivalence, a
+  weekly `fuzz` workflow, and a deterministic `tests/fuzz_like.rs` running the
+  same properties in `cargo test`; see `docs/fuzzing.md`.
 - `SearchConfig::high_recall()`: an opt-in preset with `budget = 48` and
   `tsb: true`; the default budget stays 32. On the 300 Birkbeck typo pairs it
   found the right word more often. With `tsb: true` on both sides, it expanded

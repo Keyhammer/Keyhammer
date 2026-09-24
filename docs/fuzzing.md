@@ -1,0 +1,38 @@
+# Fuzzing
+
+The core must never panic, hang or use unbounded memory, whatever it is fed.
+`crates/keyhammer/fuzz/` holds [cargo-fuzz](https://rust-fuzz.github.io/book/cargo-fuzz.html)
+(libFuzzer) targets. It is a separate Cargo workspace, so the main workspace and
+its CI need neither nightly nor libFuzzer.
+
+| Target | Property |
+| --- | --- |
+| `never_panics` | Building and searching on arbitrary bytes, with an arbitrary `k`, budget, node limit, ranking and `tsb`, returns `Ok` or `Err` and never panics; hits respect `k` and the budget. |
+| `oracle_equality` | On small inputs, hits equal a brute-force reference (`tests/support`), for `tsb` on and off and both rankings. |
+| `tsb_equivalence` | Results with `tsb: true` equal those with `tsb: false`. |
+
+Input layouts are documented in `crates/keyhammer/tests/fuzz_props/mod.rs`, which
+holds the properties themselves.
+
+## Running
+
+```sh
+cargo install cargo-fuzz
+cd crates/keyhammer
+cargo +nightly fuzz run never_panics -- -max_total_time=60
+cargo +nightly fuzz run oracle_equality
+cargo +nightly fuzz run tsb_equivalence
+```
+
+libFuzzer works best on Linux and macOS; on Windows use WSL. Corpora and crash
+artifacts (`fuzz/corpus`, `fuzz/artifacts`) are git-ignored. To replay a crash:
+`cargo +nightly fuzz run <target> fuzz/artifacts/<target>/<file>`.
+
+`.github/workflows/fuzz.yml` runs each target for 60 seconds every week and on
+demand (Actions, "Run workflow", with a `seconds` input).
+
+## Without libFuzzer
+
+`crates/keyhammer/tests/fuzz_like.rs` feeds the same properties with seeded
+pseudo-random bytes, so plain `cargo test -p keyhammer` covers them everywhere.
+It is a regression net, not a substitute for coverage-guided fuzzing.
