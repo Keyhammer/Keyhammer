@@ -42,7 +42,8 @@
 //! `catch_unwind` and reports [`kh_status::KH_ERR_INTERNAL`]. That protection
 //! needs the default `panic = "unwind"`; if this crate is built with
 //! `panic = "abort"` a panic aborts the process instead (documented, not
-//! prevented). Allocation failure also aborts, as everywhere in Rust's
+//! prevented). A caught panic still prints its message through the host's
+//! panic hook (stderr by default). Allocation failure also aborts, as everywhere in Rust's
 //! standard collections.
 
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -134,6 +135,9 @@ pub struct kh_config {
     /// Non-zero enables the subtree-signature lower bound (does not change
     /// the results). Default 0.
     pub tsb: u32,
+    /// Must be 0. It makes `sizeof(kh_config)` identical on all targets (no
+    /// implicit tail padding), so that appended fields grow the struct.
+    pub reserved: u32,
 }
 
 /// One search hit. `term` points into the index and stays valid until the
@@ -174,6 +178,12 @@ pub struct kh_index {
     trie: Trie,
     costs: CostModel,
 }
+
+// The handle may be shared by threads that only search it.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<kh_index>();
+};
 
 thread_local! {
     static LAST_ERROR: RefCell<CString> = RefCell::new(CString::default());
@@ -258,6 +268,7 @@ impl kh_config {
             ranking: KH_RANKING_COARSE,
             max_nodes: d.max_nodes as u64,
             tsb: 0,
+            reserved: 0,
         }
     }
 }
@@ -309,7 +320,8 @@ unsafe fn bytes<'a>(ptr: *const u8, len: usize, what: &str) -> Result<&'a [u8], 
 /// Duplicate terms are merged, keeping the highest weight. ASCII letters are
 /// lower-cased. On success `*out` is a new handle that must be released with
 /// `kh_index_free`; on failure `*out` is set to null. The entries and their
-/// term bytes are copied and need not outlive the call.
+/// term bytes are copied and need not outlive the call. Embedded NUL bytes in
+/// a term are accepted and returned unchanged (terms are not C strings).
 ///
 /// Fails with `KH_ERR_NULL_POINTER` (`out` or `entries` null, or a term
 /// pointer null with a non-zero length), `KH_ERR_INVALID_LENGTH`,
@@ -473,10 +485,9 @@ unsafe fn read_config(cfg: *const kh_config) -> Result<SearchConfig, kh_status> 
     if cfg.is_null() {
         return Ok(SearchConfig::default());
     }
-    // SAFETY: `cfg` is non-null. The first field is read alone, which the
-    // caller's contract (`struct_size` readable bytes, and the struct starts
-    // with `struct_size`) makes valid.
-    let size = unsafe { ptr::addr_of!((*cfg).struct_size).read_unaligned() } as usize;
+    // SAFETY: `cfg` is non-null and `struct_size` is the first field, at
+    // offset 0; the caller's contract makes at least those 4 bytes readable.
+    let size = unsafe { cfg.cast::<u32>().read_unaligned() } as usize;
     if size < size_of::<kh_config>() {
         set_error(format!(
             "cfg.struct_size is {size}, expected at least {}",
@@ -487,6 +498,10 @@ unsafe fn read_config(cfg: *const kh_config) -> Result<SearchConfig, kh_status> 
     // SAFETY: `size >= size_of::<kh_config>()` bytes are readable at `cfg`
     // (caller's contract) and every bit pattern is a valid `kh_config`.
     let c = unsafe { cfg.read_unaligned() };
+    if c.reserved != 0 {
+        set_error("cfg.reserved must be 0");
+        return Err(kh_status::KH_ERR_INVALID_ARGUMENT);
+    }
     let ranking = match c.ranking {
         KH_RANKING_COARSE => Ranking::Coarse,
         KH_RANKING_EXACT => Ranking::Exact,
@@ -514,11 +529,16 @@ unsafe fn read_config(cfg: *const kh_config) -> Result<SearchConfig, kh_status> 
 /// read, so an uninitialised struct is fine, but a previous result in it is
 /// leaked unless freed first); on failure it is set to an empty result. On
 /// success release it with `kh_results_free`. ASCII letters of the query are
-/// lower-cased. An empty query is allowed.
+/// lower-cased. An empty query is allowed. Embedded NUL bytes are ordinary
+/// bytes. The pointer returned by `kh_last_error` is invalidated by the next
+/// call into the library, including `kh_index_free` and `kh_results_free`.
+/// Copying a `kh_results` and freeing both copies is a double free, like
+/// copying the handle.
 ///
 /// Fails with `KH_ERR_NULL_POINTER` (`index` or `out` null, or `query` null
 /// with a non-zero length), `KH_ERR_INVALID_LENGTH`, `KH_ERR_INVALID_UTF8`,
-/// `KH_ERR_QUERY_TOO_LONG` or `KH_ERR_INVALID_ARGUMENT` (bad `cfg`).
+/// `KH_ERR_QUERY_TOO_LONG` (checked before the buffer is read) or
+/// `KH_ERR_INVALID_ARGUMENT` (bad `cfg`, including `reserved != 0`).
 ///
 /// # Safety
 ///
@@ -548,6 +568,12 @@ pub unsafe extern "C" fn kh_search(
             Ok(c) => c,
             Err(s) => return s,
         };
+        if query_len > KH_MAX_QUERY_LEN {
+            return fail(
+                kh_status::KH_ERR_QUERY_TOO_LONG,
+                format!("query has {query_len} bytes, the limit is {KH_MAX_QUERY_LEN}"),
+            );
+        }
         // SAFETY: forwarded from this function's contract.
         let q = match unsafe { bytes(query, query_len, "query") } {
             Ok(q) => q,

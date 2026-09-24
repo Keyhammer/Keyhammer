@@ -27,6 +27,9 @@ kh_index_free(&idx);
 - **Handle-based.** `kh_index` is opaque. The caller never sees its layout.
 - **No callbacks, no closures, no global state** other than the per-thread
   last-error message.
+- **Embedded NUL bytes** in a term or query are ordinary bytes: they are
+  accepted and returned unchanged. Terms are length-delimited, not C strings;
+  a wrapper that turns a hit into a C string must use `term_len`.
 - **UTF-8 only**, passed as `(pointer, length)`; never NUL-terminated, invalid
   UTF-8 is an error (`KH_ERR_INVALID_UTF8`). ASCII letters are lower-cased by
   this layer (the engine currently expects `a-z`), so hits return lower-cased
@@ -53,7 +56,8 @@ No panic crosses the boundary: each body runs in `catch_unwind` and a panic
 becomes `KH_ERR_INTERNAL` (there is a test that forces one). This needs the
 default `panic = "unwind"`. If a consumer builds the crate with
 `panic = "abort"`, a panic aborts the process instead, which is also safe but
-not recoverable; the repository's `wasm` profile is the only one that sets
+not recoverable. A caught panic still prints its message through the host's
+panic hook (stderr by default). The repository's `wasm` profile is the only one that sets
 `abort`, and it is not used for this crate. Out-of-memory aborts (the core
 allocates infallibly), as in any Rust program; `kh_index_build` reserves its
 own buffer with `try_reserve_exact` and reports `KH_ERR_INTERNAL` if that
@@ -72,6 +76,12 @@ fails.
   should hold the handle in exactly one place.
 - Buffers passed in (`kh_entry` array, term bytes, query, config) are only read
   during the call; `kh_index_build` copies the terms.
+- Copying a `kh_results` struct and freeing both copies is a double free, the
+  same as copying the handle: only the variable passed to the free function is
+  reset.
+- The pointer from `kh_last_error()` is invalidated by the next call into the
+  library on that thread, and that includes `kh_index_free` and
+  `kh_results_free`; copy the message if it is needed later.
 - `kh_search` overwrites `*out` without reading it, so an uninitialised
   struct is fine, but an earlier result still in it is leaked.
 
@@ -98,7 +108,13 @@ mismatch. The number is a single integer:
    codes (clients must treat any unknown non-zero as failure); new constants;
    new fields **appended** to the end of a struct that carries a size (see 3);
    new accepted values of `ranking`.
-3. **Extensible structs.** `kh_config` starts with `struct_size` (the caller's
+3. **Extensible structs.** An appended field must increase `sizeof` on every
+   target: `kh_config` therefore ends with an explicit `reserved` field (must be
+   0, else `KH_ERR_INVALID_ARGUMENT`) so that there is no implicit tail
+   padding, and a test asserts the size and the offset. Otherwise a `uint32_t`
+   appended into padding would leave `sizeof` unchanged and `struct_size`
+   could not tell the versions apart.
+    `kh_config` starts with `struct_size` (the caller's
    `sizeof`). A library reads only the fields inside `struct_size`; fields it
    knows that lie beyond it take defaults, and a `struct_size` smaller than
    version 1's is an error. So an old program works with a newer library, and a
@@ -135,10 +151,13 @@ provisional.
   double free of an index and of results, concurrent searches).
 - `bindings/c/tests/smoke.c`: a C program that includes the generated header,
   links the library, builds an index, searches and checks results and some
-  error codes. CI compiles it with the system `cc` (clang on macOS, gcc on
+  error codes. The header is also compiled as C++17 in CI (syntax only, `c++
+  -fsyntax-only`). CI compiles it with the system `cc` (clang on macOS, gcc on
   Linux) against the `cdylib`. It was also compiled and run once with MSVC
   `cl` on a Windows machine; Windows is not part of CI (no MSVC environment
-  step is set up), so that is not continuously checked.
+  step is set up), so that is not continuously checked. The header was also
+  compiled and linked as C++17 (`cl /std:c++17`) and run there once, including
+  `kh_config_default` and `kh_abi_version`; that too is a one-off.
 - Miri: `cargo miri test -p keyhammer-c` (in the weekly `miri` workflow) runs
   the Rust tests, which call the `extern "C"` functions as C would, with
   `-Zmiri-strict-provenance`. It passed locally. Miri cannot run the C
@@ -156,10 +175,21 @@ the new workspace package itself (AGPL-3.0-or-later, already allowed).
 version and `--locked`; it is not linked into anything shipped, and it is not
 in `Cargo.lock`.
 
+## Windows
+
+The exports are `#[unsafe(no_mangle)] pub extern "C"` functions, which rustc
+exports from the `cdylib` automatically: no `.def` file and no `__declspec`
+are needed. With MSVC link `keyhammer_c.dll.lib` (the import library of
+`keyhammer_c.dll`, which must be found at run time). `keyhammer_c.lib` is the
+static library; using it also needs the system libraries that the Rust
+standard library links (at least `ws2_32`, `userenv`, `ntdll` and `bcrypt`;
+`cargo rustc -p keyhammer-c -- --print native-static-libs` prints the exact
+list for a given toolchain). The header is committed with LF line endings
+(`.gitattributes`) so that the freshness check does not depend on the platform.
+
 ## Not done
 
-- No Windows CI job for the C test; no C++ compile check of the header (it has
-  `extern "C"` guards, but that is untested).
+- No Windows CI job for the C test.
 - No reusable search context, no iteration over hits with a callback (by
   design), no serialisation of an index.
 - No packaging (`pkg-config`, install rules, versioned soname): the crate is

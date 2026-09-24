@@ -160,8 +160,15 @@ jobs:
         run: |
           cargo build -p keyhammer-c --release
           lib=$PWD/target/release
-          cc -std=c99 -Wall -Wextra -Werror -Ibindings/c/include bindings/c/tests/smoke.c             -L"$lib" -lkeyhammer_c -Wl,-rpath,"$lib" -o "$RUNNER_TEMP/smoke"
+          cc -std=c99 -Wall -Wextra -Werror -Ibindings/c/include bindings/c/tests/smoke.c \n            -L"$lib" -lkeyhammer_c -Wl,-rpath,"$lib" -o "$RUNNER_TEMP/smoke"
           "$RUNNER_TEMP/smoke"
+      # The header must also compile as C++ (extern "C" guards, no C-only syntax).
+      - name: header compiles as C++
+        run: |
+          printf '#include "keyhammer.h"
+int main() { return kh_abi_version() == KH_ABI_VERSION ? 0 : 1; }
+' > "$RUNNER_TEMP/h.cpp"
+          c++ -std=c++17 -Wall -Wextra -Werror -Ibindings/c/include -fsyntax-only "$RUNNER_TEMP/h.cpp"
 
   deny:
     runs-on: ubuntu-latest

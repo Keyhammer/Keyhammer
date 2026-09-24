@@ -85,7 +85,11 @@ int main(void) {
     CHECK(kh_search(idx, (const uint8_t *)"a", 1, &bad, &res) ==
           KH_ERR_INVALID_ARGUMENT);
     CHECK(kh_search(idx, (const uint8_t *)"a", (size_t)-1, NULL, &res) ==
-          KH_ERR_INVALID_LENGTH);
+          KH_ERR_QUERY_TOO_LONG);
+    bad.ranking = KH_RANKING_COARSE;
+    bad.reserved = 1;
+    CHECK(kh_search(idx, (const uint8_t *)"a", 1, &bad, &res) ==
+          KH_ERR_INVALID_ARGUMENT);
     CHECK(strcmp(kh_status_string(KH_ERR_INVALID_UTF8), "invalid UTF-8") == 0);
 
     kh_index *none = (kh_index *)1;

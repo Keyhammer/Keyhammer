@@ -219,7 +219,7 @@ fn search_errors() {
         );
         assert_eq!(
             kh_search(idx, q.as_ptr(), usize::MAX, ptr::null(), &mut r),
-            kh_status::KH_ERR_INVALID_LENGTH
+            kh_status::KH_ERR_QUERY_TOO_LONG
         );
         assert_eq!(
             kh_search(idx, bad_utf8.as_ptr(), 2, ptr::null(), &mut r),
@@ -241,6 +241,10 @@ fn search_errors() {
     cfg.ranking = 7;
     assert_eq!(search(idx, q, &cfg).0, kh_status::KH_ERR_INVALID_ARGUMENT);
     cfg.ranking = 0;
+    cfg.reserved = 1;
+    assert_eq!(search(idx, q, &cfg).0, kh_status::KH_ERR_INVALID_ARGUMENT);
+    assert!(last_error().contains("reserved"));
+    cfg.reserved = 0;
     cfg.budget = 65;
     assert_eq!(search(idx, q, &cfg).0, kh_status::KH_ERR_INVALID_ARGUMENT);
     cfg.budget = 70_000;
@@ -273,6 +277,22 @@ fn other_null_checks() {
         unsafe { kh_index_len(ptr::null(), &mut n) },
         kh_status::KH_ERR_NULL_POINTER
     );
+}
+
+#[test]
+fn layout_has_no_implicit_padding() {
+    assert_eq!(size_of::<kh_config>(), 32);
+    assert_eq!(core::mem::offset_of!(kh_config, reserved) + 4, 32);
+}
+
+#[test]
+fn nul_bytes_in_terms_are_kept() {
+    let mut idx = build(&[entry("a b", 1)]);
+    let (s, mut r) = search(idx, b"a b", ptr::null());
+    assert_eq!(s, kh_status::KH_OK);
+    assert_eq!(terms(&r), ["a b"]);
+    unsafe { kh_results_free(&mut r) };
+    unsafe { kh_index_free(&mut idx) };
 }
 
 #[test]

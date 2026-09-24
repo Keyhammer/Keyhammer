@@ -1,8 +1,9 @@
 name: miri
 
-# Runs the core crate's tests under Miri to catch undefined behaviour. The core
-# forbids `unsafe`, so this is a cheap safety net for its dependencies and for
-# future changes; it is slow, so it runs weekly rather than on every push.
+# Runs the core crate's tests, and the tests of the C ABI crate (keyhammer-c,
+# which holds the unsafe code), under Miri to catch undefined behaviour. The
+# core forbids `unsafe`, so this is a cheap safety net for its dependencies and
+# for future changes; it is slow, so it runs weekly rather than on every push.
 on:
   schedule:
     - cron: "17 4 * * 1"

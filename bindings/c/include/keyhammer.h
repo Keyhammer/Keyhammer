@@ -121,6 +121,11 @@ typedef struct kh_config {
    the results). Default 0.
    */
   uint32_t tsb;
+  /*
+   Must be 0. It makes `sizeof(kh_config)` identical on all targets (no
+   implicit tail padding), so that appended fields grow the struct.
+   */
+  uint32_t reserved;
 } kh_config;
 
 /*
@@ -233,7 +238,8 @@ enum kh_status kh_config_default(struct kh_config *cfg);
  Duplicate terms are merged, keeping the highest weight. ASCII letters are
  lower-cased. On success `*out` is a new handle that must be released with
  `kh_index_free`; on failure `*out` is set to null. The entries and their
- term bytes are copied and need not outlive the call.
+ term bytes are copied and need not outlive the call. Embedded NUL bytes in
+ a term are accepted and returned unchanged (terms are not C strings).
 
  Fails with `KH_ERR_NULL_POINTER` (`out` or `entries` null, or a term
  pointer null with a non-zero length), `KH_ERR_INVALID_LENGTH`,
@@ -280,11 +286,16 @@ enum kh_status kh_index_len(const struct kh_index *index, size_t *out);
  read, so an uninitialised struct is fine, but a previous result in it is
  leaked unless freed first); on failure it is set to an empty result. On
  success release it with `kh_results_free`. ASCII letters of the query are
- lower-cased. An empty query is allowed.
+ lower-cased. An empty query is allowed. Embedded NUL bytes are ordinary
+ bytes. The pointer returned by `kh_last_error` is invalidated by the next
+ call into the library, including `kh_index_free` and `kh_results_free`.
+ Copying a `kh_results` and freeing both copies is a double free, like
+ copying the handle.
 
  Fails with `KH_ERR_NULL_POINTER` (`index` or `out` null, or `query` null
  with a non-zero length), `KH_ERR_INVALID_LENGTH`, `KH_ERR_INVALID_UTF8`,
- `KH_ERR_QUERY_TOO_LONG` or `KH_ERR_INVALID_ARGUMENT` (bad `cfg`).
+ `KH_ERR_QUERY_TOO_LONG` (checked before the buffer is read) or
+ `KH_ERR_INVALID_ARGUMENT` (bad `cfg`, including `reserved != 0`).
 
  # Safety
 
