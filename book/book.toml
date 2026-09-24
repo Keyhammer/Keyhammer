@@ -1,0 +1,13 @@
+[book]
+title = "Keyhammer"
+description = "Typo-tolerant top-k search over a compact trie with keyboard-aware edit costs (unpublished M0 prototype)."
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = "https://github.com/Keyhammer/Keyhammer"
+edit-url-template = "https://github.com/Keyhammer/Keyhammer/edit/main/book/{path}"
+site-url = "/Keyhammer/"

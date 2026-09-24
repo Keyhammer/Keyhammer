@@ -13,7 +13,7 @@
       - any-glob-to-any-file: ["bench/**"]
 "area: docs":
   - changed-files:
-      - any-glob-to-any-file: ["docs/**", "*.md"]
+      - any-glob-to-any-file: ["docs/**", "book/**", "*.md"]
 "area: ci":
   - changed-files:
       - any-glob-to-any-file: [".github/**"]

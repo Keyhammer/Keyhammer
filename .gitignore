@@ -8,3 +8,4 @@ crates/node/Cargo.lock
 crates/node/index.d.ts
 bench/data/
 bench/node_modules/
+/book/book/
