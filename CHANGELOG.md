@@ -17,6 +17,10 @@ All notable changes to this project are documented here. The format follows
 ### Added
 - `cost::Layout` (QWERTY, QWERTZ, AZERTY, ABNT2, Dvorak, Colemak; `#[non_exhaustive]`) and `CostModel::for_layout`: the neighbour table is derived from key geometry (staggered rows), `CostModel::qwerty()` is unchanged (regression-tested against the old table). Only a-z pairs count: ABNT2's a-z letters equal QWERTY's because `ç` is outside the alphabet (issue #19). Search, band width and subtree bound use the model's minimum costs, so they hold for every layout (oracle and fuzz tests run all layouts). `CostModel` now also derives `PartialEq`/`Eq`. First part of issue #20: not exposed in the bindings yet, no dead keys or `ç` costs until #19.
 - `docs/benchmarks/sum-bound.md`, `tests/sum_bound.rs`, `bench/src/bin/sumbound.rs`: research on a summed subtree-signature bound (#44). The sum is admissible under the current costs (argued in `docs/design/lower-bound.md` section 3a, no counterexample in about 13.2 million tested cases) but expands only 0.14-0.33% fewer nodes than `max`; not adopted, core unchanged.
+- `bench/src/bin/{recall,phonetic}.rs` and `docs/benchmarks/recall-beyond-two-edits.md`: research on recall
+  beyond two edits (budgets 32, 48 and 64 with paired differences, nodes and latency; what the unreachable pairs
+  are) and on phonetic and spelling-rule candidates prototyped outside the core with held-out splits. Verdict: no
+  budget-64 preset, no spelling-rule operation; phonetic candidates are a promising follow-up (issue #22).
 - `bindings/node`: a Node.js package for the new engine, plain JavaScript over the
   WebAssembly build (`Index.build`, `index.search` with `k`, `budget` and `ranking`,
   TypeScript types, argument errors); tested by a CI job on ubuntu, macos and windows
