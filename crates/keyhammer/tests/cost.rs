@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Robson Trasel
 //! Tests for the fixed-point cost model.
+#![allow(clippy::unwrap_used)]
 
-use keyhammer::cost::{COST_UNIT, CostModel, class, whole_units};
+use keyhammer::cost::{COST_UNIT, CostModel, Layout, class, whole_units};
 
 #[test]
 fn equal_bytes_cost_nothing() {
@@ -125,4 +126,171 @@ fn a_doubled_letter_at_position_zero_is_cheap_but_carries_the_first_byte_factor(
     assert_eq!(cm.ins_cost(b'a', Some(b'b'), 0), 24);
     // Past the first position the factor is gone.
     assert_eq!(cm.ins_cost(b'a', Some(b'a'), 1), 8);
+}
+
+// ---- keyboard layouts ------------------------------------------------------
+
+/// Hand-listed neighbours of each letter, `letter:neighbours`, for QWERTY.
+const QWERTY_NEIGHBOURS: &str = "a:qwsz b:ghnv c:dfvx d:cerfsx e:drsw f:cdgrtv g:bfhtvy h:bgjnuy \
+i:jkou j:hikmnu k:ijlmo l:kop m:jkn n:bhjm o:iklp p:lo q:aw r:deft s:adewxz t:fgry u:hijy \
+v:bcfg w:aeqs x:cdsz y:ghtu z:asx";
+
+/// QWERTZ is QWERTY with y and z exchanged.
+const QWERTZ_NEIGHBOURS: &str = "a:qwsy b:ghnv c:dfvx d:cerfsx e:drsw f:cdgrtv g:bfhtvz h:bgjnuz \
+i:jkou j:hikmnu k:ijlmo l:kop m:jkn n:bhjm o:iklp p:lo q:aw r:deft s:adewxy t:fgrz u:hijz \
+v:bcfg w:aeqs x:cdsy y:asx z:ghtu";
+
+const AZERTY_NEIGHBOURS: &str = "a:qz b:ghnv c:dfvx d:cefrsx e:drsz f:cdgrtv g:bfhtvy h:bgjnuy \
+i:jkou j:hiknu k:ijlo l:kmop m:lp n:bhj o:iklp p:lmo q:aswz r:deft s:deqwxz t:fgry u:hijy \
+v:bcfg w:qsx x:cdsw y:ghtu z:aeqs";
+
+const DVORAK_NEIGHBOURS: &str = "a:o b:dhmx c:ghrt d:bfghix e:joqpu f:dgiy g:cdfh h:bcdgmt \
+i:dfkuxy j:ekqu k:ijux l:nrs m:bhtw n:lrstvw o:aeq p:euy q:ejo r:clnt s:lnvz t:chmnrw \
+u:eijkpy v:nswz w:mntv x:bdik y:fipu z:sv";
+
+const COLEMAK_NEIGHBOURS: &str = "a:qrwz b:dhkv c:stvx d:bghjtv e:imnuy f:prsw g:djpt h:bdjkln \
+i:eoy j:dghl k:bhmn l:hjnu m:ekn n:ehklmu o:i p:fgst q:aw r:afswxz s:cfprtx t:cdgpsv u:elny \
+v:bcdt w:afqr x:crsz y:eiu z:arx";
+
+fn hand_listed(table: &str) -> Vec<(u8, Vec<u8>)> {
+    table
+        .split_whitespace()
+        .map(|entry| {
+            let (k, v) = entry.split_once(':').unwrap();
+            (k.as_bytes()[0], v.as_bytes().to_vec())
+        })
+        .collect()
+}
+
+fn neighbours_of(cm: &CostModel, a: u8) -> Vec<u8> {
+    (b'a'..=b'z')
+        .filter(|&b| b != a && cm.sub_cost(a, b, 1) == 8)
+        .collect()
+}
+
+#[test]
+fn geometry_reproduces_the_hand_listed_neighbours_of_every_layout() {
+    // The tables above are written by hand from the key positions, not from
+    // the generator. Dvorak and Colemak lose their punctuation neighbours.
+    for (layout, table) in [
+        (Layout::Qwerty, QWERTY_NEIGHBOURS),
+        (Layout::Abnt2, QWERTY_NEIGHBOURS), // ç is outside a-z, so the same
+        (Layout::Qwertz, QWERTZ_NEIGHBOURS),
+        (Layout::Azerty, AZERTY_NEIGHBOURS),
+        (Layout::Dvorak, DVORAK_NEIGHBOURS),
+        (Layout::Colemak, COLEMAK_NEIGHBOURS),
+    ] {
+        let cm = CostModel::for_layout(layout);
+        let listed = hand_listed(table);
+        assert_eq!(listed.len(), 26, "{}", layout.name());
+        for (letter, want) in listed {
+            let mut want = want;
+            want.sort_unstable();
+            assert_eq!(
+                neighbours_of(&cm, letter),
+                want,
+                "{} key {}",
+                layout.name(),
+                letter as char
+            );
+        }
+    }
+}
+
+#[test]
+fn every_layout_has_each_letter_exactly_once_and_a_symmetric_relation() {
+    for &layout in Layout::ALL {
+        let mut count = [0u8; 26];
+        for r in layout.rows() {
+            for c in r.keys().chars().filter(char::is_ascii_lowercase) {
+                count[(c as u8 - b'a') as usize] += 1;
+            }
+        }
+        assert!(count.iter().all(|&n| n == 1), "{}", layout.name());
+        let cm = CostModel::for_layout(layout);
+        for a in b'a'..=b'z' {
+            assert_eq!(cm.sub_cost(a, a, 3), 0);
+            for b in b'a'..=b'z' {
+                assert_eq!(cm.sub_cost(a, b, 2), cm.sub_cost(b, a, 2));
+                assert_eq!(
+                    layout.are_neighbours(a as char, b as char),
+                    layout.are_neighbours(b as char, a as char)
+                );
+            }
+        }
+        // Every key has a neighbour in the geometry, none is its own.
+        for r in layout.rows() {
+            for k in r.keys().chars() {
+                assert!(!layout.are_neighbours(k, k));
+            }
+        }
+    }
+}
+
+#[test]
+fn abnt2_c_cedilla_is_a_neighbour_of_l_and_p_but_outside_a_to_z() {
+    assert!(Layout::Abnt2.are_neighbours('ç', 'l'));
+    assert!(Layout::Abnt2.are_neighbours('p', 'ç'));
+    assert!(!Layout::Abnt2.are_neighbours('ç', 'k'));
+    assert!(!Layout::Qwerty.are_neighbours('ç', 'l'));
+    // Dropped from the cost model until non-a-z alphabets exist (#19).
+    assert_eq!(
+        CostModel::for_layout(Layout::Abnt2),
+        CostModel::for_layout(Layout::Qwerty)
+    );
+}
+
+#[test]
+fn qwerty_is_byte_identical_to_the_pre_layout_table() {
+    // The construction that CostModel::qwerty() used before layouts existed.
+    fn link(adjacent: &mut [u32; 26], a: u8, b: u8) {
+        let (ia, ib) = ((a - b'a') as usize, (b - b'a') as usize);
+        adjacent[ia] |= 1 << ib;
+        adjacent[ib] |= 1 << ia;
+    }
+    let rows: [&[u8]; 3] = [b"qwertyuiop", b"asdfghjkl", b"zxcvbnm"];
+    let mut adjacent = [0u32; 26];
+    for (r, row) in rows.iter().enumerate() {
+        for (c, &key) in row.iter().enumerate() {
+            if let Some(&next) = row.get(c + 1) {
+                link(&mut adjacent, key, next);
+            }
+            if let Some(below) = rows.get(r + 1) {
+                if let Some(&k) = below.get(c) {
+                    link(&mut adjacent, key, k);
+                }
+                if let Some(&k) = c.checked_sub(1).and_then(|p| below.get(p)) {
+                    link(&mut adjacent, key, k);
+                }
+            }
+        }
+    }
+    let cm = CostModel::qwerty();
+    for a in b'a'..=b'z' {
+        for b in b'a'..=b'z' {
+            let old = adjacent[(a - b'a') as usize] & (1 << (b - b'a')) != 0;
+            assert_eq!(
+                cm.sub_cost(a, b, 1),
+                if a == b {
+                    0
+                } else if old {
+                    8
+                } else {
+                    16
+                }
+            );
+        }
+    }
+    assert_eq!(CostModel::for_layout(Layout::Qwerty), cm);
+}
+
+#[test]
+fn minimum_costs_do_not_depend_on_the_layout() {
+    for &layout in Layout::ALL {
+        let cm = CostModel::for_layout(layout);
+        assert_eq!(
+            (cm.c_min(), cm.c_indel_min(), cm.c_transpose_min()),
+            (8, 8, 12)
+        );
+    }
 }
