@@ -97,7 +97,9 @@ impl Default for SearchConfig {
 /// One result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Hit {
-    /// Term id (see [`Trie::term`]).
+    /// Term id (see [`Trie::term`]): the term's position in the byte-sorted,
+    /// deduplicated list, not in the slice given to [`Trie::build`];
+    /// [`Trie::input_index`] maps it back.
     pub id: u32,
     /// Exact weighted edit cost between the query and the term, whatever the
     /// [`Ranking`].

@@ -45,6 +45,7 @@ impl fmt::Display for BuildError {
 pub struct Trie {
     terms: Vec<String>,
     weights: Vec<u16>,
+    input_index: Vec<u32>,
     label: Vec<u8>,
     child_start: Vec<u32>,
     child_count: Vec<u16>,
@@ -56,14 +57,17 @@ pub struct Trie {
 }
 
 impl Trie {
-    /// Builds a trie. Duplicate terms are merged, keeping the highest weight.
-    /// Term ids are indices into the byte-sorted, deduplicated list.
+    /// Builds a trie. Duplicate terms are merged, keeping the entry with the
+    /// highest weight (the first one among equal weights).
+    ///
+    /// Term ids are positions in the byte-sorted, deduplicated list, not
+    /// positions in `items`; [`Trie::input_index`] maps an id back to the
+    /// index in `items` of the entry that was kept.
     pub fn build(items: &[(&str, u16)]) -> Result<Trie, BuildError> {
         if items.is_empty() {
             return Err(BuildError::Empty);
         }
-        let mut pairs: Vec<(&str, u16)> = items.to_vec();
-        for (t, _) in &pairs {
+        for (t, _) in items {
             if t.is_empty() {
                 return Err(BuildError::EmptyTerm);
             }
@@ -71,7 +75,18 @@ impl Trie {
                 return Err(BuildError::TermTooLong);
             }
         }
-        pairs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()).then(b.1.cmp(&a.1)));
+        // (term, weight, input index)
+        let mut pairs: Vec<(&str, u16, u32)> = items
+            .iter()
+            .enumerate()
+            .map(|(i, &(t, w))| (t, w, i as u32))
+            .collect();
+        pairs.sort_by(|a, b| {
+            a.0.as_bytes()
+                .cmp(b.0.as_bytes())
+                .then(b.1.cmp(&a.1))
+                .then(a.2.cmp(&b.2))
+        });
         pairs.dedup_by(|cur, prev| cur.0 == prev.0);
 
         let bytes: Vec<&[u8]> = pairs.iter().map(|p| p.0.as_bytes()).collect();
@@ -133,9 +148,11 @@ impl Trie {
         }
 
         let terms = pairs.iter().map(|p| String::from(p.0)).collect();
+        let input_index = pairs.iter().map(|p| p.2).collect();
         Ok(Trie {
             terms,
             weights,
+            input_index,
             label,
             child_start,
             child_count,
@@ -170,6 +187,17 @@ impl Trie {
     /// The weight of the term with the given id.
     pub fn weight(&self, id: u32) -> u16 {
         self.weights.get(id as usize).copied().unwrap_or(0)
+    }
+
+    /// The index, in the slice given to [`Trie::build`], of the entry kept
+    /// for the term with the given id: for duplicates, the entry with the
+    /// highest weight, and the first one among equal weights. Returns
+    /// `u32::MAX` for an out-of-range id.
+    pub fn input_index(&self, id: u32) -> u32 {
+        self.input_index
+            .get(id as usize)
+            .copied()
+            .unwrap_or(u32::MAX)
     }
 
     /// The byte on the edge leading into node `v` (0 for the root).

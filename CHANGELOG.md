@@ -15,6 +15,9 @@ All notable changes to this project are documented here. The format follows
   (M0 benchmark results).
 - `search::Ranking` (`Coarse`, the default, and `Exact`), the
   `SearchConfig::ranking` field, `cost::COST_UNIT` and `cost::whole_units`.
+- `Trie::input_index`: maps a term id (a position in the sorted,
+  deduplicated list) back to the index in the input slice of the entry that
+  was kept.
 
 ### Changed
 - License changed from MIT to AGPL-3.0-or-later, effective from the commit
