@@ -46,7 +46,7 @@ kh_index_free(&idx);
 
 Every entry point checks its arguments before touching them: null pointers
 (`KH_ERR_NULL_POINTER`, except a null pointer with length 0, which is the empty
-string), lengths above `isize::MAX` (`KH_ERR_INVALID_LENGTH`), UTF-8, term and
+string), entry counts or term lengths above `isize::MAX` in `kh_index_build` (`KH_ERR_INVALID_LENGTH`; `kh_search` reports an oversize query as `KH_ERR_QUERY_TOO_LONG` instead), UTF-8, term and
 query limits (65535 bytes per term, 128 bytes per query), `struct_size`,
 `ranking` and `budget`. What cannot be checked in C is not checked: a dangling
 or misaligned pointer, a length larger than the buffer, a freed handle. Those
@@ -151,8 +151,7 @@ provisional.
   double free of an index and of results, concurrent searches).
 - `bindings/c/tests/smoke.c`: a C program that includes the generated header,
   links the library, builds an index, searches and checks results and some
-  error codes. The header is also compiled as C++17 in CI (syntax only, `c++
-  -fsyntax-only`). CI compiles it with the system `cc` (clang on macOS, gcc on
+  error codes. The header is also compiled as C++17 in CI (compiled, linked against the library and run, with `c++ -std=c++17`). CI compiles it with the system `cc` (clang on macOS, gcc on
   Linux) against the `cdylib`. It was also compiled and run once with MSVC
   `cl` on a Windows machine; Windows is not part of CI (no MSVC environment
   step is set up), so that is not continuously checked. The header was also

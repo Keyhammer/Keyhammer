@@ -293,8 +293,10 @@ enum kh_status kh_index_len(const struct kh_index *index, size_t *out);
  copying the handle.
 
  Fails with `KH_ERR_NULL_POINTER` (`index` or `out` null, or `query` null
- with a non-zero length), `KH_ERR_INVALID_LENGTH`, `KH_ERR_INVALID_UTF8`,
- `KH_ERR_QUERY_TOO_LONG` (checked before the buffer is read) or
+ with a non-zero length), `KH_ERR_INVALID_UTF8`,
+ `KH_ERR_QUERY_TOO_LONG` (`query_len` above `KH_MAX_QUERY_LEN`, checked
+ before the buffer is read, so a huge length is reported this way and
+ `KH_ERR_INVALID_LENGTH` is never returned by this function) or
  `KH_ERR_INVALID_ARGUMENT` (bad `cfg`, including `reserved != 0`).
 
  # Safety
