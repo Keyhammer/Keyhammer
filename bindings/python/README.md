@@ -64,10 +64,10 @@ kh.SearchConfig.high_recall()                   # the core's opt-in preset (budg
 
 ## Limits
 
-- **ASCII only, lowercase letters in practice.** The core compares bytes and
-  is designed for `a-z` until Unicode support lands (issue #19). The binding
-  lower-cases ASCII letters and refuses non-ASCII terms and queries with an
-  error instead of comparing UTF-8 bytes one by one. Other ASCII characters
+- **ASCII only, lowercase letters in practice.** The core now compares code
+  points and can fold case and diacritics (issue #19), but this binding does
+  not use that yet: it lower-cases ASCII letters and refuses non-ASCII terms
+  and queries with an error. Lifting the restriction is a follow-up. Other ASCII characters
   (digits, punctuation) are accepted but compared verbatim, with no keyboard
   neighbourhood; results on them are not tuned or measured.
 - **Build once, no changes.** The issue asks for add, remove and export. The

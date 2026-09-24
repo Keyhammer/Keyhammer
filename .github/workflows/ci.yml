@@ -24,6 +24,15 @@ jobs:
       - run: cargo doc -p keyhammer --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+      # The folding tables are generated from Python's unicodedata; this fails
+      # if tables.rs was edited by hand or the generator changed without a
+      # regeneration. Python is pinned because each version ships its own
+      # Unicode version, which the generated header records (3.12: 15.0.0).
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: text tables match their generator
+        run: python crates/keyhammer/scripts/gen_text_tables.py | diff - crates/keyhammer/src/text/tables.rs
 
   test:
     strategy:

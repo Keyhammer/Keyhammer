@@ -32,8 +32,9 @@ kh_index_free(&idx);
   a wrapper that turns a hit into a C string must use `term_len`.
 - **UTF-8 only**, passed as `(pointer, length)`; never NUL-terminated, invalid
   UTF-8 is an error (`KH_ERR_INVALID_UTF8`). ASCII letters are lower-cased by
-  this layer (the engine currently expects `a-z`), so hits return lower-cased
-  terms. Bytes outside `a-z` are compared verbatim, as in the core.
+  this layer, so hits return lower-cased terms. Other characters are compared
+  per code point, as in the core; the core's case and diacritic folding
+  (`docs/design/unicode.md`) is not used by the C ABI yet.
 - **Plain results.** `kh_results` is a struct with an array of `kh_hit`. A
   hit's `term` points into the index (no copy) and is valid until the index is
   freed; `kh_results_free` frees only the array.

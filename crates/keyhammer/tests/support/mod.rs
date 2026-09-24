@@ -24,9 +24,35 @@ impl Rng {
     }
 }
 
-/// Naive full-matrix weighted OSA distance, written independently of the trie search.
+/// The engine's symbols for `s`, decoded here with `std::str::from_utf8` and
+/// its error positions (the crate uses `utf8_chunks`): the code points of
+/// valid UTF-8, and `0x110000 + b` for each byte `b` of an invalid sequence
+/// (`docs/design/unicode.md`, section 3.2).
+pub fn chars_of(mut s: &[u8]) -> Vec<u32> {
+    let mut out = Vec::new();
+    loop {
+        match std::str::from_utf8(s) {
+            Ok(v) => {
+                out.extend(v.chars().map(u32::from));
+                return out;
+            }
+            Err(e) => {
+                let (good, rest) = s.split_at(e.valid_up_to());
+                let good = std::str::from_utf8(good).unwrap_or_default();
+                out.extend(good.chars().map(u32::from));
+                let bad = e.error_len().unwrap_or(rest.len());
+                out.extend(rest[..bad].iter().map(|&b| 0x11_0000 + u32::from(b)));
+                s = &rest[bad..];
+            }
+        }
+    }
+}
+
+/// Naive full-matrix weighted OSA distance, written independently of the trie
+/// search, over code points (the engine's symbols).
 pub fn oracle_cost(cm: &CostModel, q: &[u8], t: &[u8]) -> u32 {
-    oracle_matrix(cm, q, t)[t.len()][q.len()]
+    let (q, t) = (chars_of(q), chars_of(t));
+    oracle_matrix(cm, &q, &t)[t.len()][q.len()]
 }
 
 /// Prefix-mode cost: the smallest weighted OSA cost between the whole query
@@ -35,12 +61,13 @@ pub fn oracle_cost(cm: &CostModel, q: &[u8], t: &[u8]) -> u32 {
 /// that straddles the cut point is never allowed (both swapped bytes must be
 /// inside the prefix).
 pub fn oracle_prefix_cost(cm: &CostModel, q: &[u8], t: &[u8]) -> u32 {
-    let d = oracle_matrix(cm, q, t);
+    let (q, t) = (chars_of(q), chars_of(t));
+    let d = oracle_matrix(cm, &q, &t);
     d.iter().map(|row| row[q.len()]).min().unwrap_or(u32::MAX)
 }
 
 /// `d[j][i]` aligns the term prefix `t[..j]` with the query prefix `q[..i]`.
-fn oracle_matrix(cm: &CostModel, q: &[u8], t: &[u8]) -> Vec<Vec<u32>> {
+fn oracle_matrix(cm: &CostModel, q: &[u32], t: &[u32]) -> Vec<Vec<u32>> {
     const BIG: u32 = 1_000_000;
     let (m, n) = (q.len(), t.len());
     let mut d = vec![vec![BIG; m + 1]; n + 1];

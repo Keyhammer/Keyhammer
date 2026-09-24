@@ -7,7 +7,9 @@
 //! costs. This crate is `no_std` (it needs `alloc`), forbids `unsafe` and has
 //! no runtime dependencies.
 //!
-//! Status: M0 prototype. Queries and terms are raw bytes, already lowercased.
+//! Status: M0 prototype. Queries and terms are compared per Unicode code
+//! point, as given; the [`text`] module folds case and diacritics when asked
+//! to.
 //!
 //! # Example
 //!
@@ -44,4 +46,5 @@ extern crate std;
 
 pub mod cost;
 pub mod search;
+pub mod text;
 pub mod trie;
