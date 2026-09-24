@@ -142,6 +142,20 @@ for (let i = 0; i < 300; i++) cycle();
 const after = kh.memory.buffer.byteLength;
 check('memory stable', after === before, `${before} -> ${after}`);
 
+// The module is served publicly: it must not contain build-machine paths
+// (panic locations embed source paths unless they are remapped, see
+// README.md). Set KH_ALLOW_PATHS=1 to skip this check for a plain local build.
+const strings = bytes.toString('latin1').match(/[\x20-\x7e]{4,}/g) ?? [];
+const pathLike = [...new Set(strings.filter((s) => /\.rs\b|[\\/]src[\\/]/.test(s)))];
+const leaking = strings.filter((s) => /[A-Za-z]:\\|\/Users\/|\/home\/|\/c\/Users/.test(s));
+if (process.env.KH_ALLOW_PATHS) {
+  console.log(`path check skipped (KH_ALLOW_PATHS set): ${leaking.length} machine path(s)`);
+} else {
+  check('no build-machine paths', leaking.length === 0, leaking.slice(0, 5).join(' | '));
+}
+console.log(`path-like strings left (${pathLike.length}):`);
+for (const s of pathLike) console.log(`  ${s}`);
+
 const gz = gzipSync(bytes, { level: 9 }).length;
 console.log(`wasm size: ${bytes.length} bytes raw, ${gz} bytes gzip (level 9)`);
 if (failures.length > 0) {
