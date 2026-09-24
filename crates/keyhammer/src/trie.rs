@@ -85,6 +85,63 @@ impl Labels {
     }
 }
 
+/// The structure of a trie before its aggregates are computed.
+struct Shape {
+    child_start: Vec<u32>,
+    child_count: Vec<u16>,
+    term_id: Vec<u32>,
+    depth_of: Vec<u16>,
+}
+
+/// Lays out the trie of `terms` (sorted, distinct, non-empty) breadth first;
+/// returns the edge labels and the structure.
+fn shape<T: Copy + Default + PartialEq>(terms: &[&[T]]) -> Result<(Vec<T>, Shape), BuildError> {
+    let mut label = vec![T::default()];
+    let mut child_start = vec![0u32];
+    let mut child_count = vec![0u16];
+    let mut term_id = vec![NO_TERM];
+    let mut depth_of = vec![0u16];
+
+    let mut queue: VecDeque<(usize, usize, usize, usize)> = VecDeque::new();
+    queue.push_back((0, 0, terms.len(), 0));
+    while let Some((node, mut lo, hi, depth)) = queue.pop_front() {
+        if terms[lo].len() == depth {
+            term_id[node] = index_u32(lo)?;
+            lo += 1;
+        }
+        let first_child = label.len() as u32;
+        let mut count = 0u16;
+        let mut i = lo;
+        while i < hi {
+            let b = terms[i][depth];
+            let mut j = i + 1;
+            while j < hi && terms[j][depth] == b {
+                j += 1;
+            }
+            let child = label.len();
+            label.push(b);
+            child_start.push(0);
+            child_count.push(0);
+            term_id.push(NO_TERM);
+            depth_of.push((depth + 1) as u16);
+            queue.push_back((child, i, j, depth + 1));
+            count += 1;
+            i = j;
+        }
+        child_start[node] = first_child;
+        child_count[node] = count;
+    }
+    Ok((
+        label,
+        Shape {
+            child_start,
+            child_count,
+            term_id,
+            depth_of,
+        },
+    ))
+}
+
 /// A trie over strings, split into Unicode scalar values, with a weight per
 /// term.
 #[derive(Clone, Debug)]
@@ -140,53 +197,37 @@ impl Trie {
         });
         pairs.dedup_by(|cur, prev| cur.0 == prev.0);
 
-        // The terms as symbols, in one buffer: term `i` is
-        // `syms[start[i]..start[i + 1]]`.
-        let mut syms: Vec<u32> = Vec::new();
-        let mut start: Vec<usize> = Vec::with_capacity(pairs.len() + 1);
-        for p in &pairs {
+        // ASCII terms are walked as bytes (the symbols are the bytes); any
+        // other dictionary as code points, in one buffer.
+        let (
+            label,
+            Shape {
+                child_start,
+                child_count,
+                term_id,
+                depth_of,
+            },
+        ) = if pairs.iter().all(|p| p.0.is_ascii()) {
+            let terms: Vec<&[u8]> = pairs.iter().map(|p| p.0.as_bytes()).collect();
+            let (label, shape) = shape(&terms)?;
+            (Labels::Narrow(label), shape)
+        } else {
+            let mut syms: Vec<u32> = Vec::new();
+            let mut start: Vec<usize> = Vec::with_capacity(pairs.len() + 1);
+            for p in &pairs {
+                start.push(syms.len());
+                syms.extend(p.0.chars().map(u32::from));
+            }
             start.push(syms.len());
-            syms.extend(p.0.chars().map(u32::from));
-        }
-        start.push(syms.len());
-        let term = |i: usize| &syms[start[i]..start[i + 1]];
-        let wide = syms.iter().any(|&c| c > 0xFF);
-
-        let mut label = vec![0u32];
-        let mut child_start = vec![0u32];
-        let mut child_count = vec![0u16];
-        let mut term_id = vec![NO_TERM];
-        let mut depth_of = vec![0u16];
-
-        let mut queue: VecDeque<(usize, usize, usize, usize)> = VecDeque::new();
-        queue.push_back((0, 0, pairs.len(), 0));
-        while let Some((node, mut lo, hi, depth)) = queue.pop_front() {
-            if term(lo).len() == depth {
-                term_id[node] = index_u32(lo)?;
-                lo += 1;
-            }
-            let first_child = label.len() as u32;
-            let mut count = 0u16;
-            let mut i = lo;
-            while i < hi {
-                let b = term(i)[depth];
-                let mut j = i + 1;
-                while j < hi && term(j)[depth] == b {
-                    j += 1;
-                }
-                let child = label.len();
-                label.push(b);
-                child_start.push(0);
-                child_count.push(0);
-                term_id.push(NO_TERM);
-                depth_of.push((depth + 1) as u16);
-                queue.push_back((child, i, j, depth + 1));
-                count += 1;
-                i = j;
-            }
-            child_start[node] = first_child;
-            child_count[node] = count;
-        }
+            let terms: Vec<&[u32]> = start.windows(2).map(|w| &syms[w[0]..w[1]]).collect();
+            let (label, shape) = shape(&terms)?;
+            let label = if label.iter().any(|&c| c > 0xFF) {
+                Labels::Wide(label)
+            } else {
+                Labels::Narrow(label.into_iter().map(|c| c as u8).collect())
+            };
+            (label, shape)
+        };
 
         let weights: Vec<u16> = pairs.iter().map(|p| p.1).collect();
         let n = label.len();
@@ -205,17 +246,12 @@ impl Trie {
                 max_weight[v] = max_weight[v].max(max_weight[c]);
                 len_min[v] = len_min[v].min(len_min[c]);
                 len_max[v] = len_max[v].max(len_max[c]);
-                below_mask[v] |= symbol_class(label[c]) | below_mask[c];
+                below_mask[v] |= symbol_class(label.get(c)) | below_mask[c];
             }
         }
 
         let terms = pairs.iter().map(|p| String::from(p.0)).collect();
         let input_index = pairs.iter().map(|p| p.2).collect();
-        let label = if wide {
-            Labels::Wide(label)
-        } else {
-            Labels::Narrow(label.into_iter().map(|c| c as u8).collect())
-        };
         Ok(Trie {
             terms,
             weights,
