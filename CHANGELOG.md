@@ -30,6 +30,12 @@ All notable changes to this project are documented here. The format follows
   bound and a new `prefix_oracle_equality` fuzz target. `Stats` gains `rows_computed` and is now `#[non_exhaustive]` (it can no longer be built with a struct literal outside the crate). Work counters
   against the exact mode are in `docs/benchmarks/prefix-mode.md`; the proof is in
   `docs/design/prefix-mode.md` (issue #30).
+- `bench/src/bin/calib.rs` (behind `--features calibration`), `bench/experiments/cost-knobs.patch` and
+  `docs/benchmarks/calibration{-preregistration,}.md`: a pre-registered calibration of the cost model on
+  four corpora with train, validation and test splits (300 models). The rule proposes a follow-up
+  (first-byte factor 1.25, neighbouring-key substitution 12, indel 12: +0.0134 MRR@10 on the test split,
+  SE 0.0015, but about 1.67x the nodes expanded); the shipped costs are unchanged and the core crate is
+  untouched (issue #21).
 - `bindings/node`: a Node.js package for the new engine, plain JavaScript over the
   WebAssembly build (`Index.build`, `index.search` with `k`, `budget` and `ranking`,
   TypeScript types, argument errors); tested by a CI job on ubuntu, macos and windows
