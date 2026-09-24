@@ -1,0 +1,91 @@
+name: pages
+
+# Builds the documentation site (Docusaurus + rustdoc). Pull requests only
+# build it. Publishing happens on push to main and on manual dispatch, and
+# needs GitHub Pages enabled with the "GitHub Actions" source.
+on:
+  pull_request:
+    paths:
+      - "website/**"
+      - "docs/**"
+      - "crates/keyhammer/**"
+      - "CONTRIBUTING.md"
+      - "CHANGELOG.md"
+      - ".github/workflows/pages.yml"
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "docs/**"
+      - "crates/keyhammer/**"
+      - "CONTRIBUTING.md"
+      - "CHANGELOG.md"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Per-ref group: superseded builds are cancelled, and a build can never
+    # queue behind or replace a deploy.
+    concurrency:
+      group: pages-build-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: stable
+
+      # The site links to /api/keyhammer/, which does not exist in a plain
+      # local `npm run build`: the rustdoc output is copied into static/api
+      # here so that Docusaurus serves it.
+      - name: Build the API reference
+        run: |
+          cargo doc -p keyhammer --no-deps
+          mkdir -p website/static/api
+          cp -r target/doc/. website/static/api/
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Build the site
+        working-directory: website
+        run: npm run build
+
+      - name: Check that the API reference landed in the site
+        run: test -f website/build/api/keyhammer/index.html
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: website/build
+
+  deploy:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
