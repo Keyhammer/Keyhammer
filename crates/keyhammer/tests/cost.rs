@@ -173,10 +173,11 @@ fn neighbours_of(cm: &CostModel, a: u8) -> Vec<u8> {
 #[test]
 fn geometry_reproduces_the_hand_listed_neighbours_of_every_layout() {
     // The tables above are written by hand from the key positions, not from
-    // the generator. Dvorak and Colemak lose their punctuation neighbours.
+    // the generator. Only pairs of letters a-z are listed here; the keys
+    // outside a-z are checked in `keys_outside_a_to_z_are_neighbours_too`.
     for (layout, table) in [
         (Layout::Qwerty, QWERTY_NEIGHBOURS),
-        (Layout::Abnt2, QWERTY_NEIGHBOURS), // ç is outside a-z, so the same
+        (Layout::Abnt2, QWERTY_NEIGHBOURS), // same letters; ç is not a-z
         (Layout::Qwertz, QWERTZ_NEIGHBOURS),
         (Layout::Azerty, AZERTY_NEIGHBOURS),
         (Layout::Dvorak, DVORAK_NEIGHBOURS),
@@ -217,16 +218,49 @@ fn every_layout_has_a_symmetric_relation() {
 }
 
 #[test]
-fn abnt2_c_cedilla_is_a_neighbour_of_l_and_p_but_outside_a_to_z() {
+fn abnt2_c_cedilla_is_a_neighbour_of_l_and_p() {
     assert!(Layout::Abnt2.are_neighbours('ç', 'l'));
     assert!(Layout::Abnt2.are_neighbours('p', 'ç'));
     assert!(!Layout::Abnt2.are_neighbours('ç', 'k'));
     assert!(!Layout::Qwerty.are_neighbours('ç', 'l'));
-    // Dropped from the cost model until non-a-z alphabets exist (#19).
-    assert_eq!(
-        CostModel::for_layout(Layout::Abnt2),
-        CostModel::for_layout(Layout::Qwerty)
-    );
+    // Active in the cost model since the search compares code points (#19).
+    let abnt2 = CostModel::for_layout(Layout::Abnt2);
+    let qwerty = CostModel::for_layout(Layout::Qwerty);
+    assert_eq!(abnt2.sub_cost('ç', 'l', 1), 8);
+    assert_eq!(abnt2.sub_cost('p', 'ç', 1), 8);
+    assert_eq!(abnt2.sub_cost('ç', 'k', 1), 16);
+    assert_eq!(abnt2.sub_cost('ç', 'l', 0), 12);
+    assert_eq!(qwerty.sub_cost('ç', 'l', 1), 16);
+    assert_ne!(abnt2, qwerty);
+}
+
+#[test]
+fn keys_outside_a_to_z_are_neighbours_too() {
+    for (layout, a, b) in [
+        (Layout::Abnt2, 'ç', '.'),
+        (Layout::Abnt2, ';', 'ç'),
+        (Layout::Abnt2, 'm', ','),
+        (Layout::Azerty, 'ù', 'm'),
+        (Layout::Qwertz, 'ü', 'p'),
+        (Layout::Qwertz, 'ö', 'l'),
+        (Layout::Qwertz, 'ä', 'ö'),
+        (Layout::Dvorak, ',', 'o'),
+        (Layout::Dvorak, '\'', 'a'),
+        (Layout::Colemak, ';', 'o'),
+    ] {
+        let cm = CostModel::for_layout(layout);
+        assert_eq!(cm.sub_cost(a, b, 1), 8, "{} {a} {b}", layout.name());
+        assert_eq!(cm.sub_cost(b, a, 1), 8, "{} {b} {a}", layout.name());
+        // A byte API caller still gets the same answer for ASCII keys.
+        if a.is_ascii() && b.is_ascii() {
+            assert_eq!(cm.sub_cost(a as u8, b as u8, 1), 8);
+        }
+    }
+    // QWERTY models no key outside a-z: nothing changes there.
+    let q = CostModel::qwerty();
+    for (a, b) in [('l', ';'), ('m', ','), ('p', '['), ('ç', 'l')] {
+        assert_eq!(q.sub_cost(a, b, 1), 16);
+    }
 }
 
 #[test]

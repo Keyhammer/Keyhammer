@@ -90,9 +90,9 @@ pub fn class(b: u8) -> u64 {
 /// One row of a keyboard [`Layout`]: the keys left to right and where the
 /// first one starts.
 ///
-/// Positions are in half key widths, so key `i` is at `offset + 2 * i`. Only
-/// letters `a` to `z` take part in the cost model; other keys (`ç`, `;`, ...)
-/// are kept so that the geometry stays honest.
+/// Positions are in half key widths, so key `i` is at `offset + 2 * i`. Every
+/// key takes part in the cost model, letters `a` to `z` and others (`ç`, `ù`,
+/// `;`, ...) alike.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Row {
     offset: u8,
@@ -111,8 +111,16 @@ const fn row(offset: u8, keys: &'static str) -> Row {
 }
 
 const QWERTY: [Row; 3] = [row(0, "qwertyuiop"), row(1, "asdfghjkl"), row(2, "zxcvbnm")];
-const QWERTZ: [Row; 3] = [row(0, "qwertzuiop"), row(1, "asdfghjkl"), row(2, "yxcvbnm")];
-const AZERTY: [Row; 3] = [row(0, "azertyuiop"), row(1, "qsdfghjklm"), row(2, "wxcvbn")];
+const QWERTZ: [Row; 3] = [
+    row(0, "qwertzuiopü"),
+    row(1, "asdfghjklöä"),
+    row(2, "yxcvbnm"),
+];
+const AZERTY: [Row; 3] = [
+    row(0, "azertyuiop"),
+    row(1, "qsdfghjklmù"),
+    row(2, "wxcvbn"),
+];
 const ABNT2: [Row; 3] = [
     row(0, "qwertyuiop"),
     row(1, "asdfghjklç"),
@@ -129,10 +137,12 @@ const COLEMAK: [Row; 3] = [
     row(2, "zxcvbkm"),
 ];
 
-/// Neighbour bit sets (a-z only) of one layout, computed at compile time by
-/// the rule described on [`Layout`].
-const fn table(rows: &[Row; 3]) -> [u32; 26] {
-    let mut adj = [0u32; 26];
+/// Walks every unordered pair of neighbouring keys of `rows` (the rule
+/// described on [`Layout`]), at compile time. Pairs of two letters `a`-`z`
+/// go into the bit sets `adj`; every other pair is written to `extra` while
+/// it has room. Returns the number of other pairs, written or not.
+const fn walk(rows: &[Row; 3], adj: &mut [u32; 26], extra: &mut [(u32, u32)]) -> usize {
+    let mut n = 0;
     let mut r = 0;
     while r < 3 {
         let a_row = rows[r].keys.as_bytes();
@@ -140,11 +150,11 @@ const fn table(rows: &[Row; 3]) -> [u32; 26] {
         let mut ba = 0; // byte index of key i
         while ba < a_row.len() {
             let xa = rows[r].offset as usize + 2 * i;
-            let ka = a_row[ba];
+            let ka = decode_key(a_row, ba);
             // Next key in the same row.
             let bn = next_key(a_row, ba);
             if bn < a_row.len() {
-                link(&mut adj, ka, a_row[bn]);
+                n = link(adj, extra, n, ka, decode_key(a_row, bn));
             }
             if r + 1 < 3 {
                 let b_row = rows[r + 1].keys.as_bytes();
@@ -153,7 +163,7 @@ const fn table(rows: &[Row; 3]) -> [u32; 26] {
                 while bb < b_row.len() {
                     let xb = rows[r + 1].offset as usize + 2 * j;
                     if xa.abs_diff(xb) <= 1 {
-                        link(&mut adj, ka, b_row[bb]);
+                        n = link(adj, extra, n, ka, decode_key(b_row, bb));
                     }
                     bb = next_key(b_row, bb);
                     j += 1;
@@ -164,7 +174,48 @@ const fn table(rows: &[Row; 3]) -> [u32; 26] {
         }
         r += 1;
     }
+    n
+}
+
+/// Neighbour bit sets of the letters `a`-`z` of one layout.
+const fn table(rows: &[Row; 3]) -> [u32; 26] {
+    let mut adj = [0u32; 26];
+    walk(rows, &mut adj, &mut []);
     adj
+}
+
+/// Number of neighbour pairs of one layout that involve a key outside `a`-`z`.
+const fn extra_count(rows: &[Row; 3]) -> usize {
+    walk(rows, &mut [0u32; 26], &mut [])
+}
+
+/// The neighbour pairs of one layout that involve a key outside `a`-`z`.
+const fn extra<const N: usize>(rows: &[Row; 3]) -> [(u32, u32); N] {
+    let mut out = [(0u32, 0u32); N];
+    walk(rows, &mut [0u32; 26], &mut out);
+    out
+}
+
+/// The code point of the UTF-8 key starting at byte `b`.
+const fn decode_key(bytes: &[u8], b: usize) -> u32 {
+    let x = bytes[b] as u32;
+    if x < 0x80 {
+        x
+    } else if x < 0xE0 {
+        ((x & 0x1F) << 6) | cont(bytes, b + 1)
+    } else if x < 0xF0 {
+        ((x & 0x0F) << 12) | (cont(bytes, b + 1) << 6) | cont(bytes, b + 2)
+    } else {
+        ((x & 0x07) << 18)
+            | (cont(bytes, b + 1) << 12)
+            | (cont(bytes, b + 2) << 6)
+            | cont(bytes, b + 3)
+    }
+}
+
+/// The six payload bits of the UTF-8 continuation byte at `i`.
+const fn cont(bytes: &[u8], i: usize) -> u32 {
+    (bytes[i] & 0x3F) as u32
 }
 
 /// Byte index of the key after the one starting at `b` (keys are UTF-8).
@@ -176,13 +227,20 @@ const fn next_key(bytes: &[u8], b: usize) -> usize {
     n
 }
 
-const fn link(adj: &mut [u32; 26], a: u8, b: u8) {
-    // Any lead byte outside a-z (`ç`, punctuation) is dropped.
-    if a.is_ascii_lowercase() && b.is_ascii_lowercase() {
-        let (ia, ib) = ((a - b'a') as usize, (b - b'a') as usize);
-        adj[ia] |= 1 << ib;
-        adj[ib] |= 1 << ia;
+/// Records the pair `a`, `b`: in `adj` if both are letters `a`-`z`, else as
+/// pair number `n` in `extra` (if there is room). Returns the new count of
+/// other pairs.
+const fn link(adj: &mut [u32; 26], extra: &mut [(u32, u32)], n: usize, a: u32, b: u32) -> usize {
+    let (ia, ib) = (a.wrapping_sub(0x61), b.wrapping_sub(0x61));
+    if ia < 26 && ib < 26 {
+        adj[ia as usize] |= 1 << ib;
+        adj[ib as usize] |= 1 << ia;
+        return n;
     }
+    if n < extra.len() {
+        extra[n] = (a, b);
+    }
+    n + 1
 }
 
 const QWERTY_ADJ: [u32; 26] = table(&QWERTY);
@@ -191,6 +249,13 @@ const AZERTY_ADJ: [u32; 26] = table(&AZERTY);
 const ABNT2_ADJ: [u32; 26] = table(&ABNT2);
 const DVORAK_ADJ: [u32; 26] = table(&DVORAK);
 const COLEMAK_ADJ: [u32; 26] = table(&COLEMAK);
+
+const QWERTY_EXTRA: [(u32, u32); extra_count(&QWERTY)] = extra(&QWERTY);
+const QWERTZ_EXTRA: [(u32, u32); extra_count(&QWERTZ)] = extra(&QWERTZ);
+const AZERTY_EXTRA: [(u32, u32); extra_count(&AZERTY)] = extra(&AZERTY);
+const ABNT2_EXTRA: [(u32, u32); extra_count(&ABNT2)] = extra(&ABNT2);
+const DVORAK_EXTRA: [(u32, u32); extra_count(&DVORAK)] = extra(&DVORAK);
+const COLEMAK_EXTRA: [(u32, u32); extra_count(&COLEMAK)] = extra(&COLEMAK);
 
 /// A physical keyboard layout, from which the neighbouring-key relation of a
 /// [`CostModel`] is derived.
@@ -212,20 +277,26 @@ const COLEMAK_ADJ: [u32; 26] = table(&COLEMAK);
 ///
 /// # What is and is not covered
 ///
-/// The search alphabet is the bytes `a` to `z` (lowercase; other characters
-/// are issue #19). The cost model keeps only neighbour pairs where **both**
-/// keys are letters `a` to `z`. A key outside that set (`ç` on ABNT2, the
-/// punctuation keys on Dvorak and Colemak) takes part in the geometry
-/// ([`Layout::are_neighbours`] reports it) but every pair that involves it is
-/// dropped from the cost model, so a letter next to such a key loses that
-/// neighbour until #19 lands. Not modelled at all: the number row, the extra
-/// ISO key beside the left shift, punctuation columns after the letter rows,
-/// modifiers, dead keys and AltGr layers. The unit costs are the same for every
-/// layout and remain provisional.
+/// Every modelled key counts, letters `a` to `z` and others alike: `ç` on
+/// ABNT2 (next to `l` and `p`, and to `.` and `;` below it), `ù` on AZERTY
+/// (after `m`), `ü` on QWERTZ (after `p`) and `ö`, `ä` (after `l`), and the
+/// punctuation keys of the ABNT2 bottom row, of Dvorak and of Colemak. The
+/// search compares Unicode code points (`docs/design/unicode.md`), so a
+/// query with `ç` for a term with `l` is a neighbouring-key substitution on
+/// ABNT2. Keys are lowercase: an uppercase letter is a different symbol,
+/// with no neighbours, unless the text is case folded (see
+/// [`crate::text::Normalizer`]). With diacritic folding on (the default),
+/// `ç`, `ù`, `ü`, `ö` and `ä` never reach the search (they become `c`, `u`,
+/// `u`, `o` and `a`), so these neighbours only matter without it.
 ///
-/// In particular the a-z part of ABNT2 is identical to QWERTY: the only
-/// difference is `ç` (next to `l` and `p`, and to `.` and `;` below it), which
-/// the a-z alphabet cannot use yet.
+/// Not modelled at all: the number row, the extra ISO key beside the left
+/// shift, the punctuation columns after the letter rows of QWERTY, QWERTZ and
+/// AZERTY and after the top row of ABNT2, modifiers, dead keys and AltGr
+/// layers. The unit costs are the same for every layout and remain
+/// provisional.
+///
+/// The pairs of two letters `a`-`z` of ABNT2 are those of QWERTY; the layouts
+/// differ by `ç` and the punctuation keys.
 ///
 /// # Examples
 ///
@@ -234,8 +305,12 @@ const COLEMAK_ADJ: [u32; 26] = table(&COLEMAK);
 ///
 /// assert!(Layout::Qwerty.are_neighbours('a', 's'));
 /// assert!(!Layout::Qwerty.are_neighbours('a', 'd'));
-/// // ç sits next to l on ABNT2, but ç is outside a-z (issue #19).
+/// // ç sits next to l and p on ABNT2.
 /// assert!(Layout::Abnt2.are_neighbours('l', 'ç'));
+/// assert!(Layout::Abnt2.are_neighbours('ç', 'p'));
+/// // ù follows m on AZERTY, ö follows l on QWERTZ.
+/// assert!(Layout::Azerty.are_neighbours('m', 'ù'));
+/// assert!(Layout::Qwertz.are_neighbours('l', 'ö'));
 /// // QWERTZ swaps y and z: z now sits beside t, u, g and h.
 /// assert!(Layout::Qwertz.are_neighbours('z', 't'));
 /// assert!(!Layout::Qwerty.are_neighbours('z', 't'));
@@ -249,12 +324,14 @@ const COLEMAK_ADJ: [u32; 26] = table(&COLEMAK);
 pub enum Layout {
     /// ANSI QWERTY, the default.
     Qwerty,
-    /// QWERTZ (German): `y` and `z` swapped relative to QWERTY.
+    /// QWERTZ (German): `y` and `z` swapped relative to QWERTY, `ü` after `p`
+    /// and `ö`, `ä` after `l`.
     Qwertz,
-    /// AZERTY (French): `a`/`q` and `z`/`w` swapped, `m` on the home row.
+    /// AZERTY (French): `a`/`q` and `z`/`w` swapped, `m` and `ù` on the home
+    /// row.
     Azerty,
-    /// Brazilian ABNT2. Its cost model is currently identical to
-    /// [`Layout::Qwerty`]: `ç` is outside the a-z alphabet until #19.
+    /// Brazilian ABNT2: the QWERTY letters, plus `ç` after `l` and the
+    /// punctuation keys `,` `.` `;` after `m`.
     Abnt2,
     /// Dvorak (US).
     Dvorak,
@@ -301,9 +378,9 @@ impl Layout {
         }
     }
 
-    /// Whether keys `a` and `b` are neighbours on this layout, counting every
-    /// modelled key (not only a-z). `false` for a key that is not on the
-    /// modelled rows and for `a == b`.
+    /// Whether keys `a` and `b` are neighbours on this layout. `false` for a
+    /// key that is not on the modelled rows and for `a == b`. The cost model
+    /// of [`CostModel::for_layout`] uses exactly this relation.
     ///
     /// ```
     /// use keyhammer::cost::Layout;
@@ -353,7 +430,10 @@ pub struct CostModel {
     indel: Cost,
     indel_double: Cost,
     transpose: Cost,
+    /// Neighbour bit sets of the letters `a`-`z`.
     adjacent: [u32; 26],
+    /// Neighbour pairs that involve a key outside `a`-`z`.
+    extra: &'static [(u32, u32)],
 }
 
 /// Edits on the first query byte are less likely, so they cost 1.5x.
@@ -370,8 +450,9 @@ impl CostModel {
     }
 
     /// A model whose cheap substitutions are the neighbouring keys of
-    /// `layout`. Only pairs of letters `a` to `z` count; see [`Layout`] for
-    /// what that leaves out. Does not panic.
+    /// `layout` ([`Layout::are_neighbours`]); see [`Layout`] for what the
+    /// geometry leaves out. Every other pair of characters costs an ordinary
+    /// substitution. Does not panic.
     ///
     /// # Examples
     ///
@@ -386,17 +467,20 @@ impl CostModel {
     /// // m is next to n on QWERTY only.
     /// assert_eq!(qwerty.sub_cost(b'm', b'n', 1), 8);
     /// assert_eq!(azerty.sub_cost(b'm', b'n', 1), 16);
-    /// // ABNT2 has the QWERTY letters (ç is outside a-z).
-    /// assert_eq!(CostModel::for_layout(Layout::Abnt2), qwerty);
+    /// // ABNT2 has the QWERTY letters, and ç next to l and p.
+    /// let abnt2 = CostModel::for_layout(Layout::Abnt2);
+    /// assert_eq!(abnt2.sub_cost('ç', 'l', 1), 8);
+    /// assert_eq!(qwerty.sub_cost('ç', 'l', 1), 16);
+    /// assert_eq!(abnt2.sub_cost('a', 's', 1), qwerty.sub_cost('a', 's', 1));
     /// ```
     pub fn for_layout(layout: Layout) -> Self {
-        let adjacent = match layout {
-            Layout::Qwerty => QWERTY_ADJ,
-            Layout::Qwertz => QWERTZ_ADJ,
-            Layout::Azerty => AZERTY_ADJ,
-            Layout::Abnt2 => ABNT2_ADJ,
-            Layout::Dvorak => DVORAK_ADJ,
-            Layout::Colemak => COLEMAK_ADJ,
+        let (adjacent, extra): ([u32; 26], &'static [(u32, u32)]) = match layout {
+            Layout::Qwerty => (QWERTY_ADJ, &QWERTY_EXTRA),
+            Layout::Qwertz => (QWERTZ_ADJ, &QWERTZ_EXTRA),
+            Layout::Azerty => (AZERTY_ADJ, &AZERTY_EXTRA),
+            Layout::Abnt2 => (ABNT2_ADJ, &ABNT2_EXTRA),
+            Layout::Dvorak => (DVORAK_ADJ, &DVORAK_EXTRA),
+            Layout::Colemak => (COLEMAK_ADJ, &COLEMAK_EXTRA),
         };
         Self {
             sub: 16,
@@ -405,13 +489,19 @@ impl CostModel {
             indel_double: 8,
             transpose: 12,
             adjacent,
+            extra,
         }
     }
 
     #[inline]
     fn is_adjacent(&self, a: u32, b: u32) -> bool {
         let (ia, ib) = (a.wrapping_sub(0x61), b.wrapping_sub(0x61));
-        ia < 26 && ib < 26 && self.adjacent[ia as usize] & (1u32 << ib) != 0
+        if ia < 26 && ib < 26 {
+            return self.adjacent[ia as usize] & (1u32 << ib) != 0;
+        }
+        self.extra
+            .iter()
+            .any(|&(x, y)| (x == a && y == b) || (x == b && y == a))
     }
 
     /// Cost of typing `q` where the term has `t`; `qpos` is the index of `q` in the query.
@@ -487,6 +577,7 @@ impl CostModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     /// Runtime neighbour set of a-z pairs, from the same geometry.
     fn runtime_table(layout: Layout) -> [u32; 26] {
@@ -504,13 +595,62 @@ mod tests {
     #[test]
     fn compile_time_tables_equal_the_runtime_geometry() {
         for &layout in Layout::ALL {
-            assert_eq!(
-                CostModel::for_layout(layout).adjacent,
-                runtime_table(layout),
-                "{}",
-                layout.name()
-            );
+            let cm = CostModel::for_layout(layout);
+            assert_eq!(cm.adjacent, runtime_table(layout), "{}", layout.name());
+            let mut runtime = Vec::new();
+            layout.for_each_pair(|a, b| {
+                if !(a.is_ascii_lowercase() && b.is_ascii_lowercase()) {
+                    runtime.push((u32::from(a), u32::from(b)));
+                }
+            });
+            assert_eq!(cm.extra, runtime.as_slice(), "{}", layout.name());
         }
+    }
+
+    #[test]
+    fn the_cost_model_uses_exactly_the_layout_relation() {
+        for &layout in Layout::ALL {
+            let cm = CostModel::for_layout(layout);
+            let mut keys: Vec<char> = layout
+                .rows()
+                .iter()
+                .flat_map(|r| r.keys().chars())
+                .collect();
+            // Characters on no modelled key, and case variants of keys.
+            keys.extend(['A', 'Ç', 'é', '1', ' ', 'ж', '\u{0}']);
+            for &a in &keys {
+                for &b in &keys {
+                    let want = if a == b {
+                        0
+                    } else if layout.are_neighbours(a, b) {
+                        8
+                    } else {
+                        16
+                    };
+                    assert_eq!(cm.sub_cost(a, b, 1), want, "{} {a:?} {b:?}", layout.name());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_new_keys_have_their_neighbours() {
+        let pairs = |layout: Layout, key: char| -> Vec<char> {
+            let mut v: Vec<char> = layout
+                .rows()
+                .iter()
+                .flat_map(|r| r.keys().chars())
+                .filter(|&o| layout.are_neighbours(key, o))
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        assert_eq!(pairs(Layout::Abnt2, 'ç'), ['.', ';', 'l', 'p']);
+        assert_eq!(pairs(Layout::Azerty, 'ù'), ['m']);
+        assert_eq!(pairs(Layout::Qwertz, 'ü'), ['p', 'ä', 'ö']);
+        assert_eq!(pairs(Layout::Qwertz, 'ö'), ['l', 'p', 'ä', 'ü']);
+        assert_eq!(pairs(Layout::Qwertz, 'ä'), ['ö', 'ü']);
+        assert!(CostModel::qwerty().extra.is_empty());
     }
 
     #[test]
