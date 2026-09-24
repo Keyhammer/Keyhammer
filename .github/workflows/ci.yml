@@ -126,6 +126,42 @@ jobs:
         working-directory: bindings/node
         run: |
           npm pack --dry-run --json | node -e 'const f=JSON.parse(require("fs").readFileSync(0,"utf8"))[0].files.map(x=>x.path).sort().join(","); console.log(f); if (f!=="README.md,index.d.ts,index.js,keyhammer.wasm,package.json") process.exit(1)'
+  c-abi:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt -p keyhammer-c -- --check
+      - run: cargo clippy -p keyhammer-c --all-targets -- -D warnings
+      - run: cargo test -p keyhammer-c
+      - run: cargo doc -p keyhammer-c --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      # The header is generated; the committed copy must be current. cbindgen is
+      # a build tool only (MPL-2.0), not a dependency of the workspace.
+      - name: header is up to date
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: bindings/c
+        run: |
+          cargo install cbindgen --version 0.29.4 --locked
+          cbindgen --config cbindgen.toml --crate keyhammer-c --output "$RUNNER_TEMP/keyhammer.h"
+          diff -u include/keyhammer.h "$RUNNER_TEMP/keyhammer.h" || {
+            echo "::error::bindings/c/include/keyhammer.h is stale; regenerate it (see cbindgen.toml)"
+            exit 1
+          }
+      # A real C program against the generated header and the shared library.
+      - name: C smoke test
+        run: |
+          cargo build -p keyhammer-c --release
+          lib=$PWD/target/release
+          cc -std=c99 -Wall -Wextra -Werror -Ibindings/c/include bindings/c/tests/smoke.c             -L"$lib" -lkeyhammer_c -Wl,-rpath,"$lib" -o "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke"
 
   deny:
     runs-on: ubuntu-latest

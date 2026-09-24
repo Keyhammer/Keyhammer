@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["legacy", "crates/keyhammer", "bench", "bindings/wasm"]
+members = ["legacy", "crates/keyhammer", "bench", "bindings/wasm", "bindings/c"]
 exclude = ["bindings/python", "bench/competitors", "crates/keyhammer/fuzz"]
 
 [workspace.lints.rust]

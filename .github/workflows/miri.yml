@@ -43,3 +43,6 @@ jobs:
           --skip both_rankings
           --skip tsb_and_plain
           --skip a_term_of_
+      # The C ABI crate holds unsafe code (raw pointers from C); its tests are
+      # small, so all of them run.
+      - run: cargo miri test -p keyhammer-c

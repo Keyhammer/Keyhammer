@@ -263,6 +263,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyhammer-c"
+version = "0.1.0"
+dependencies = [
+ "keyhammer",
+]
+
+[[package]]
 name = "keyhammer-legacy"
 version = "0.1.0"
 dependencies = [

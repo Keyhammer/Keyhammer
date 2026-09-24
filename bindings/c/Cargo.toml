@@ -1,0 +1,19 @@
+[package]
+name = "keyhammer-c"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Stable C ABI over the Keyhammer core (handle-based, UTF-8, no callbacks)"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/Keyhammer/Keyhammer"
+publish = false
+
+# The workspace lints are not inherited on purpose: the core forbids `unsafe`,
+# while this boundary crate needs a documented amount of it (raw pointers
+# handed over by C). The equivalent lints are set in src/lib.rs.
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+keyhammer = { path = "../../crates/keyhammer" }
