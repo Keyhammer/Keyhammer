@@ -45,6 +45,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod cost;
+pub mod highlight;
 pub mod search;
 pub mod text;
 pub mod trie;

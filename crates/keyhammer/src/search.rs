@@ -35,12 +35,14 @@ use core::cmp::Ordering;
 use core::fmt;
 
 use crate::cost::{Cost, CostModel, INF, symbol_class, whole_units};
+use crate::highlight::{self, Highlight, HighlightError, HighlightMode};
 use crate::text;
 use crate::trie::{NO_TERM, Trie};
 
 /// Longest accepted query, in symbols (code points; bytes for ASCII).
 pub const MAX_QUERY_LEN: usize = 128;
-const MAX_W: usize = 8;
+/// Largest band half-width: the budget is at most `MAX_W * c_indel_min`.
+pub(crate) const MAX_W: usize = 8;
 const ROW: usize = 2 * MAX_W + 1;
 
 /// How results are ordered.
@@ -268,11 +270,108 @@ fn cap(v: Cost, budget: Cost) -> Cost {
     if v > budget { INF } else { v }
 }
 
+/// Index of the substitution (or match) among the moves of [`each_move`].
+pub(crate) const SUB: usize = 0;
+/// Index of the transposition among the moves of [`each_move`].
+pub(crate) const TRANSPOSE: usize = 1;
+/// Index of the insertion (a skipped term symbol) among the moves of [`each_move`].
+pub(crate) const INSERT: usize = 2;
+/// Index of the deletion (an extra query symbol) among the moves of [`each_move`].
+pub(crate) const DELETE: usize = 3;
+
+/// Calls `f(move, value)` for each move into the weighted OSA cell `D[i][j]`
+/// that is available (query prefix `q[..i]`, term prefix of length `j` ending
+/// in `ch`, whose previous symbol is `parent`, `None` when `j <= 1`); `move`
+/// is [`SUB`], [`TRANSPOSE`], [`INSERT`] or [`DELETE`].
+///
+/// `diag`, `up`, `left` and `skip2` are `D[i-1][j-1]`, `D[i][j-1]`,
+/// `D[i-1][j]` and `D[i-2][j-2]` (`INF` when absent or over the budget). This
+/// is the only place where the cost model's step costs enter a DP cell: the
+/// rows of the search ([`cell_min`]) and the traceback of
+/// [`crate::highlight`] ([`moves`]) both go through it, so highlighting
+/// cannot drift from the costs the search reports. A visitor rather than an
+/// array keeps the search's hot loop as fast as a hand-written minimum.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+pub(crate) fn each_move(
+    cm: &CostModel,
+    q: &[u32],
+    i: usize,
+    ch: u32,
+    parent: Option<u32>,
+    diag: Cost,
+    up: Cost,
+    left: Cost,
+    skip2: Cost,
+    mut f: impl FnMut(usize, Cost),
+) {
+    if i >= 1 && diag < INF {
+        f(SUB, diag + cm.sub_cost(q[i - 1], ch, i - 1));
+    }
+    if up < INF {
+        f(INSERT, up + cm.ins_cost(ch, parent, i));
+    }
+    if i >= 1 && left < INF {
+        f(DELETE, left + cm.del_cost(q, i - 1));
+    }
+    if let Some(p) = parent {
+        if i >= 2 && q[i - 1] == p && q[i - 2] == ch && q[i - 1] != q[i - 2] && skip2 < INF {
+            f(TRANSPOSE, skip2 + cm.transpose_cost(i - 2));
+        }
+    }
+}
+
+/// The value of each move of [`each_move`], indexed by [`SUB`],
+/// [`TRANSPOSE`], [`INSERT`] and [`DELETE`]; `INF` for a move that is not
+/// available.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+pub(crate) fn moves(
+    cm: &CostModel,
+    q: &[u32],
+    i: usize,
+    ch: u32,
+    parent: Option<u32>,
+    diag: Cost,
+    up: Cost,
+    left: Cost,
+    skip2: Cost,
+) -> [Cost; 4] {
+    let mut out = [INF; 4];
+    each_move(cm, q, i, ch, parent, diag, up, left, skip2, |k, v| {
+        out[k] = v;
+    });
+    out
+}
+
+/// The value of the cell: the smallest value of the moves of [`each_move`].
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn cell_min(
+    cm: &CostModel,
+    q: &[u32],
+    i: usize,
+    ch: u32,
+    parent: Option<u32>,
+    diag: Cost,
+    up: Cost,
+    left: Cost,
+    skip2: Cost,
+) -> Cost {
+    let mut best = INF;
+    each_move(cm, q, i, ch, parent, diag, up, left, skip2, |_, v| {
+        best = best.min(v);
+    });
+    best
+}
+
 fn root_row(q: &[u32], cm: &CostModel, w: usize, budget: Cost) -> [Cost; ROW] {
     let mut row = [INF; ROW];
     row[w] = 0;
     for i in 1..=q.len().min(w) {
-        row[w + i] = cap(row[w + i - 1].saturating_add(cm.del_cost(q, i - 1)), budget);
+        // Row 0 of the term: only deletions (no term symbol, so `ch` is unused).
+        let d = cell_min(cm, q, i, 0, None, INF, INF, row[w + i - 1], INF);
+        row[w + i] = cap(d, budget);
     }
     row
 }
@@ -291,6 +390,7 @@ fn child_row(
 ) -> [Cost; ROW] {
     let m = q.len();
     let j = depth + 1;
+    let parent = if depth >= 1 { Some(parent_label) } else { None };
     let mut out = [INF; ROW];
     for k in 0..=2 * w {
         let i_signed = (j + k) as isize - w as isize;
@@ -298,27 +398,15 @@ fn child_row(
             continue;
         }
         let i = i_signed as usize;
-        let mut best = INF;
-        if i >= 1 && cur[k] < INF {
-            best = best.min(cur[k] + cm.sub_cost(q[i - 1], ch, i - 1));
-        }
-        if k < 2 * w && cur[k + 1] < INF {
-            let prev_t = if depth >= 1 { Some(parent_label) } else { None };
-            best = best.min(cur[k + 1] + cm.ins_cost(ch, prev_t, i));
-        }
-        if i >= 1 && k >= 1 && out[k - 1] < INF {
-            best = best.min(out[k - 1] + cm.del_cost(q, i - 1));
-        }
-        if depth >= 1
-            && i >= 2
-            && q[i - 1] == parent_label
-            && q[i - 2] == ch
-            && q[i - 1] != q[i - 2]
-            && prev[k] < INF
-        {
-            best = best.min(prev[k] + cm.transpose_cost(i - 2));
-        }
-        out[k] = cap(best, budget);
+        // Cell k of this row is D[i][j]; cell k of `cur` is D[i-1][j-1],
+        // k + 1 of `cur` is D[i][j-1], k - 1 of `out` is D[i-1][j] and k of
+        // `prev` is D[i-2][j-2].
+        let up = if k < 2 * w { cur[k + 1] } else { INF };
+        let left = if k >= 1 { out[k - 1] } else { INF };
+        out[k] = cap(
+            cell_min(cm, q, i, ch, parent, cur[k], up, left, prev[k]),
+            budget,
+        );
     }
     out
 }
@@ -486,6 +574,8 @@ pub struct Searcher {
     /// The normalised query of `search_text`.
     qtext: String,
     seq: u32,
+    /// Buffers of the highlighting traceback.
+    pub(crate) hl: highlight::Scratch,
 }
 
 impl Searcher {
@@ -665,6 +755,153 @@ impl Searcher {
     ) -> Result<Output, SearchError> {
         let len = self.load_text(trie, q);
         self.run_prefix(trie, cm, len, cfg)
+    }
+
+    /// The characters of a hit that the query matched, as ranges of `source`
+    /// in code points, UTF-8 bytes and UTF-16 units (see
+    /// [`crate::highlight`] and `docs/design/highlighting.md`).
+    ///
+    /// `q` is the query exactly as given to [`Searcher::search`]
+    /// ([`HighlightMode::Whole`]) or [`Searcher::search_prefix`]
+    /// ([`HighlightMode::Prefix`]), and `hit` one of the hits that search
+    /// returned. `source` is the string the caller inserted for the term: for
+    /// a trie from [`Trie::build_normalized`], the entry
+    /// `items[trie.input_index(hit.id)]`; for a trie from [`Trie::build`],
+    /// the term itself ([`Trie::term`]`(hit.id)`). It must normalise, with
+    /// the trie's normaliser if it has one, to the hit's term.
+    ///
+    /// The alignment is recomputed on the full matrix and walked back; its
+    /// cost always equals `hit.cost` ([`Highlight::cost`]). The search itself
+    /// does no highlighting work: call this only for the hits you show. The
+    /// work per hit is at most `(m + 1) * (m + 9)` matrix cells for a query
+    /// of `m` symbols ([`Highlight::cells`]), plus a pass over `source`.
+    ///
+    /// # Errors
+    ///
+    /// [`HighlightError::QueryTooLong`] as for the search,
+    /// [`HighlightError::UnknownTerm`] if `hit.id` is not a term of `trie`,
+    /// [`HighlightError::SourceMismatch`] if `source` does not normalise to
+    /// the term, [`HighlightError::CostMismatch`] if the alignment does not
+    /// cost `hit.cost` (a hit of another query, cost model or mode).
+    ///
+    /// # Panics
+    ///
+    /// Never, for any input.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use keyhammer::cost::CostModel;
+    /// use keyhammer::highlight::HighlightMode;
+    /// use keyhammer::search::{SearchConfig, Searcher};
+    /// use keyhammer::trie::Trie;
+    ///
+    /// let trie = Trie::build(&[("javascript", 10), ("java", 30)]).unwrap();
+    /// let cm = CostModel::qwerty();
+    /// let mut s = Searcher::new();
+    /// let cfg = SearchConfig::default();
+    ///
+    /// // "javasript" skips the "c": everything else is highlighted.
+    /// let out = s.search(&trie, &cm, b"javasript", &cfg).unwrap();
+    /// let hit = &out.hits[0];
+    /// let term = trie.term(hit.id);
+    /// let h = s
+    ///     .highlight(&trie, &cm, b"javasript", hit, term, HighlightMode::Whole)
+    ///     .unwrap();
+    /// let spans: Vec<&str> = h.ranges.iter().map(|r| &term[r.utf8.clone()]).collect();
+    /// assert_eq!(spans, ["javas", "ript"]);
+    /// assert_eq!(h.cost, hit.cost);
+    ///
+    /// // Prefix mode: only the typed prefix is highlighted.
+    /// let out = s.search_prefix(&trie, &cm, b"jav", &cfg).unwrap();
+    /// for hit in &out.hits {
+    ///     let term = trie.term(hit.id);
+    ///     let h = s
+    ///         .highlight(&trie, &cm, b"jav", hit, term, HighlightMode::Prefix)
+    ///         .unwrap();
+    ///     assert_eq!(h.ranges[0].chars, 0..3);
+    ///     assert_eq!(h.aligned.chars, 0..3);
+    /// }
+    /// ```
+    pub fn highlight(
+        &mut self,
+        trie: &Trie,
+        cm: &CostModel,
+        q: &[u8],
+        hit: &Hit,
+        source: &str,
+        mode: HighlightMode,
+    ) -> Result<Highlight, HighlightError> {
+        let len = text::decode(q, &mut self.qsym, MAX_QUERY_LEN);
+        self.run_highlight(trie, cm, len, hit, source, mode)
+    }
+
+    /// [`Searcher::highlight`] for a hit of [`Searcher::search_text`]
+    /// ([`HighlightMode::Whole`]) or [`Searcher::search_prefix_text`]
+    /// ([`HighlightMode::Prefix`]): `q` is normalised with the trie's
+    /// normaliser first, as those searches do.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Searcher::highlight`].
+    ///
+    /// # Panics
+    ///
+    /// Never, for any input.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use keyhammer::cost::CostModel;
+    /// use keyhammer::highlight::HighlightMode;
+    /// use keyhammer::search::{SearchConfig, Searcher};
+    /// use keyhammer::text::Normalizer;
+    /// use keyhammer::trie::Trie;
+    ///
+    /// let items = [("Straße", 1)];
+    /// let trie = Trie::build_normalized(&items, &Normalizer::new()).unwrap();
+    /// let cm = CostModel::qwerty();
+    /// let mut s = Searcher::new();
+    /// let out = s.search_text(&trie, &cm, "STRASE", &SearchConfig::default()).unwrap();
+    /// let hit = &out.hits[0];
+    /// let h = s
+    ///     .highlight_text(&trie, &cm, "STRASE", hit, items[0].0, HighlightMode::Whole)
+    ///     .unwrap();
+    /// // One of the two "s" of "ß" was typed: "ß" counts as typed.
+    /// assert_eq!(h.ranges.len(), 1);
+    /// assert_eq!(h.ranges[0].chars, 0..6);
+    /// assert_eq!(h.ranges[0].utf8, 0..7);
+    /// ```
+    pub fn highlight_text(
+        &mut self,
+        trie: &Trie,
+        cm: &CostModel,
+        q: &str,
+        hit: &Hit,
+        source: &str,
+        mode: HighlightMode,
+    ) -> Result<Highlight, HighlightError> {
+        let len = self.load_text(trie, q);
+        self.run_highlight(trie, cm, len, hit, source, mode)
+    }
+
+    /// [`Searcher::highlight`] on the `len` symbols in `self.qsym`.
+    fn run_highlight(
+        &mut self,
+        trie: &Trie,
+        cm: &CostModel,
+        len: usize,
+        hit: &Hit,
+        source: &str,
+        mode: HighlightMode,
+    ) -> Result<Highlight, HighlightError> {
+        if len > MAX_QUERY_LEN {
+            return Err(HighlightError::QueryTooLong {
+                len,
+                max: MAX_QUERY_LEN,
+            });
+        }
+        highlight::run(&mut self.hl, trie, cm, &self.qsym, hit, source, mode)
     }
 
     /// [`Searcher::search`] on the `len` symbols in `self.qsym`.

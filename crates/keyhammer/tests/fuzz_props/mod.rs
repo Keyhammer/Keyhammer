@@ -392,3 +392,118 @@ pub fn text_oracle_equality(data: &[u8]) {
         }
     }
 }
+
+/// The range invariants of `docs/design/highlighting.md` section 2.2: every
+/// range and `aligned` are valid, agreeing ranges of `source` in the three
+/// units; ranges are non-empty, sorted, not touching and inside `aligned`.
+fn check_highlight(h: &keyhammer::highlight::Highlight, source: &str) {
+    let n = source.chars().count();
+    for r in h.ranges.iter().chain(std::iter::once(&h.aligned)) {
+        assert!(r.chars.start <= r.chars.end && r.chars.end <= n);
+        assert_eq!(
+            text::utf8_range(source, r.chars.clone()),
+            Some(r.utf8.clone())
+        );
+        assert_eq!(
+            text::utf16_range(source, r.chars.clone()),
+            Some(r.utf16.clone())
+        );
+    }
+    for r in &h.ranges {
+        assert!(r.chars.start < r.chars.end);
+        assert!(h.aligned.chars.start <= r.chars.start && r.chars.end <= h.aligned.chars.end);
+    }
+    for w in h.ranges.windows(2) {
+        assert!(w[0].chars.end < w[1].chars.start);
+    }
+}
+
+/// Highlighting. Layout as [`text_oracle_equality`]. Every hit of
+/// `search_text` and `search_prefix_text` must highlight in its mode with a
+/// cost equal to `Hit::cost` and to the brute-force oracle, and well-formed
+/// ranges. Then, on the raw bytes: a plain trie of the lossily decoded chunks
+/// is highlighted with an arbitrary query, id, cost, mode and source string,
+/// which must return `Ok` with well-formed ranges or an error, never panic.
+pub fn highlight(data: &[u8]) {
+    use keyhammer::highlight::HighlightMode;
+    use keyhammer::search::Hit;
+    let mut c = Cursor(data);
+    let flags = c.u8();
+    let k = 1 + usize::from(c.u8() % 12);
+    let budget = u16::from(c.u8() % 65);
+    let qlen = (usize::from(c.u8()) % 17).min(c.0.len());
+    let (qraw, rest) = c.0.split_at(qlen);
+    let to_text = |b: &[u8]| -> String {
+        b.iter()
+            .map(|&x| TEXT_ALPHABET[usize::from(x % 16)])
+            .collect()
+    };
+    let q = to_text(qraw);
+    let terms: Vec<String> = rest
+        .split(|&b| b == 0xFF)
+        .take(24)
+        .filter_map(|chunk| {
+            let t = chunk.get(1..).unwrap_or_default();
+            let t = &t[..t.len().min(10)];
+            (!t.is_empty()).then(|| to_text(t))
+        })
+        .collect();
+    let n = MODES[usize::from(flags >> 3) % MODES.len()];
+    let items: Vec<(&str, u16)> = terms.iter().map(|t| (t.as_str(), 1)).collect();
+    let cm = CostModel::for_layout(layout(flags));
+    let mut s = Searcher::new();
+    if let Ok(trie) = Trie::build_normalized(&items, &n) {
+        let nq = n.normalize(&q);
+        let cfg = SearchConfig {
+            k,
+            budget,
+            tsb: flags & 2 != 0,
+            max_nodes: usize::MAX,
+            ranking: ranking(flags),
+        };
+        for mode in [HighlightMode::Whole, HighlightMode::Prefix] {
+            let out = match mode {
+                HighlightMode::Whole => s.search_text(&trie, &cm, &q, &cfg),
+                _ => s.search_prefix_text(&trie, &cm, &q, &cfg),
+            }
+            .unwrap();
+            for hit in &out.hits {
+                let source = items[trie.input_index(hit.id) as usize].0;
+                let h = s
+                    .highlight_text(&trie, &cm, &q, hit, source, mode)
+                    .unwrap_or_else(|e| panic!("{e}: q={q:?} source={source:?} {n:?} {mode:?}"));
+                let t = trie.term(hit.id).as_bytes();
+                let want = match mode {
+                    HighlightMode::Whole => oracle_cost(&cm, nq.as_bytes(), t),
+                    _ => crate::support::oracle_prefix_cost(&cm, nq.as_bytes(), t),
+                };
+                assert_eq!(h.cost, hit.cost);
+                assert_eq!(u32::from(h.cost), want, "q={q:?} source={source:?}");
+                check_highlight(&h, source);
+            }
+        }
+    }
+    // Arbitrary inputs: never a panic.
+    let raw_terms = parse_terms(rest, 16, false);
+    let Some(trie) = build(&raw_terms) else {
+        return;
+    };
+    let hit = Hit {
+        id: u32::from(flags) % (trie.len() as u32 + 2),
+        cost: budget,
+        weight: 0,
+    };
+    let mode = if flags & 4 == 0 {
+        HighlightMode::Whole
+    } else {
+        HighlightMode::Prefix
+    };
+    let source = trie.term(hit.id).to_owned();
+    let other = String::from_utf8_lossy(qraw).into_owned();
+    for src in [source.as_str(), other.as_str()] {
+        if let Ok(h) = s.highlight(&trie, &cm, qraw, &hit, src, mode) {
+            assert_eq!(h.cost, hit.cost);
+            check_highlight(&h, src);
+        }
+    }
+}
