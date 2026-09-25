@@ -84,3 +84,33 @@ The node and row counts are those of the owned trie too (asserted per query).
 - **WebAssembly module.** `keyhammer-wasm` built with the `wasm` profile and the CI path remap,
   gzipped as in the CI size gate: 18 169 bytes on `main` against 18 175 on this branch (no
   meaningful change; the module does not use the format).
+
+## After the merge with match highlighting (#71), 2026-09-25
+
+Highlighting refactored the DP cell into one function (`each_move`) shared by the search rows
+and the traceback; this branch made the search, and now the highlighter, generic over the node
+source. Rebased on `main` 595cfc1 and rechecked:
+
+- **Digests.** A scratch program (not committed) ran the 300 Birkbeck queries on the 10 000 and
+  100 000-word dictionaries, as given (ASCII) and with `e`, `a` and `o` replaced by `é`, `ж`
+  and `ö` in terms and queries (non-ASCII, wide labels), for `SearchConfig::default()` and
+  `high_recall()`, `tsb` on and off, both rankings, exact and prefix: 64 configurations. For each
+  it printed the sums of `nodes_expanded`, `nodes_pushed` and `rows_computed` and a hash of
+  every hit (id, cost, weight) and counter. The output built against `main` 595cfc1 and against
+  this branch was identical, line for line; in the branch build every search was also run on the
+  borrowed `Index` view and asserted equal (hits and `Stats`) to the owned trie.
+- **Highlighting on the view.** `Index::highlight` / `highlight_text` give the same `Highlight`
+  as `Searcher::highlight` / `highlight_text` on the trie, for every hit of the round-trip test.
+- **Latency, owned path (indication).** The same program timed all 64 configurations per
+  dictionary and script, three runs per side, alternating, load reading 8 to 26%. Median totals,
+  `main` against this branch: with the default 16 codegen units 1425.6 / 1441.7 ms (10 000 ASCII),
+  1185.7 / 1204.9 (10 000 non-ASCII), 3115.6 / 3142.8 (100 000 ASCII), 2620.9 / 2651.1
+  (100 000 non-ASCII), 0.9 to 1.6% slower; with one codegen unit 1.1 to 4.5% slower (the largest
+  on 100 000 non-ASCII: 2505.0 / 2617.8 ms). Marking the trait's methods `#[inline(always)]`
+  did not change this. The work counters are identical, so the difference is code generation, not
+  work; an earlier comparison before the merge (above) went the other way with one codegen
+  unit. Not resolved: a small cost of the generic code on the owned path of 1 to 2% (up to
+  4.5% in one cell) cannot be excluded on this evidence.
+- **WebAssembly module.** Built locally as in CI (`wasm` profile, path remap), gzipped: 18 192
+  bytes on `main` 595cfc1 against 18 188 on this branch (budget 20 480).
+

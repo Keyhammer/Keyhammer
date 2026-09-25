@@ -613,6 +613,10 @@ pub(crate) trait Nodes {
     fn below_mask(&self, v: usize) -> u64;
     fn weight(&self, id: u32) -> u16;
     fn normalizer(&self) -> Option<Normalizer>;
+    /// Number of terms.
+    fn term_count(&self) -> usize;
+    /// The text of term `id` (`""` for an unknown id).
+    fn term(&self, id: u32) -> &str;
 }
 
 impl Nodes for Trie {
@@ -651,6 +655,12 @@ impl Nodes for Trie {
     #[inline]
     fn normalizer(&self) -> Option<Normalizer> {
         Trie::normalizer(self)
+    }
+    fn term_count(&self) -> usize {
+        Trie::len(self)
+    }
+    fn term(&self, id: u32) -> &str {
+        Trie::term(self, id)
     }
 }
 

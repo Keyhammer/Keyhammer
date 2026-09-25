@@ -278,10 +278,14 @@ results of the rebuilt trie. It cannot return a wrong result because of a wrong 
 
 Public additions only: the module `keyhammer::index` with `Index`, `FormatError`
 (`#[non_exhaustive]`), the constants `MAGIC`, `VERSION` and `PROFILE`, and `Trie::to_bytes` and
-`Trie::from_bytes`. Nothing existing changes signature. The search code is generic over a
-crate-private trait; the public `Searcher` methods instantiate it for `Trie` only, so the owned
-path is the same monomorphic code as before and its node counts, results and costs are
-unchanged (the existing regression tests pin them). The view pays a bounds check and a
+`Trie::from_bytes`. Nothing existing changes signature. The search code, and the match
+highlighting of `docs/design/highlighting.md`, are generic over a crate-private trait; the
+public `Searcher` methods instantiate them for `Trie` only, and `Index::search`,
+`search_prefix`, `search_text`, `search_prefix_text`, `highlight` and `highlight_text` for the
+view. The DP cell (`each_move` in `search.rs`) stays one function shared by the search rows and
+the highlighting traceback, and does not depend on the node source. The owned path's node
+counts, results and costs are unchanged (the existing regression tests pin them, and a digest
+comparison against `main` in `docs/benchmarks/index-format.md` found them identical). The view pays a bounds check and a
 little-endian decode per read, and four bytes per label; `docs/benchmarks/index-format.md`
 measures the file size, the load (validation) time and the search cost on the view. In short,
 on 274 137 words (one shared machine): the file is 21.0 MB, about 19% below the estimated heap

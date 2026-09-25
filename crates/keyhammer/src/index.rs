@@ -44,7 +44,8 @@ use core::fmt;
 use core::ops::Range;
 
 use crate::cost::{CostModel, symbol_class};
-use crate::search::{Output, SearchConfig, SearchError, Searcher};
+use crate::highlight::{Highlight, HighlightError, HighlightMode};
+use crate::search::{Hit, Output, SearchConfig, SearchError, Searcher};
 use crate::text::{self, Normalizer};
 use crate::trie::{NO_TERM, Nodes, Parts, Trie};
 
@@ -798,6 +799,46 @@ impl<'a> Index<'a> {
         searcher.search_text_in(self, cm, q, cfg, true)
     }
 
+    /// [`Searcher::highlight`] for a hit of [`Index::search`] or
+    /// [`Index::search_prefix`] on the view: the same ranges as on the trie
+    /// that was written. `source` is the caller's string for the term, as for
+    /// the trie; with a loaded index, find it through
+    /// [`Index::input_index`] only after bounds-checking that value (it is
+    /// untrusted file data).
+    ///
+    /// # Errors
+    ///
+    /// As for [`Searcher::highlight`].
+    pub fn highlight(
+        &self,
+        searcher: &mut Searcher,
+        cm: &CostModel,
+        q: &[u8],
+        hit: &Hit,
+        source: &str,
+        mode: HighlightMode,
+    ) -> Result<Highlight, HighlightError> {
+        searcher.highlight_in(self, cm, q, hit, source, mode)
+    }
+
+    /// [`Searcher::highlight_text`] on the view: `q` is normalised with the
+    /// recorded normaliser, as [`Index::search_text`] does.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Searcher::highlight`].
+    pub fn highlight_text(
+        &self,
+        searcher: &mut Searcher,
+        cm: &CostModel,
+        q: &str,
+        hit: &Hit,
+        source: &str,
+        mode: HighlightMode,
+    ) -> Result<Highlight, HighlightError> {
+        searcher.highlight_text_in(self, cm, q, hit, source, mode)
+    }
+
     /// The child of `v` labelled `sym`, by binary search among the sorted
     /// labels of its children.
     fn find_child(&self, v: usize, sym: u32) -> Option<usize> {
@@ -1084,6 +1125,12 @@ impl Nodes for Index<'_> {
     #[inline]
     fn normalizer(&self) -> Option<Normalizer> {
         self.normalizer
+    }
+    fn term_count(&self) -> usize {
+        Index::len(self)
+    }
+    fn term(&self, id: u32) -> &str {
+        Index::term(self, id)
     }
 }
 

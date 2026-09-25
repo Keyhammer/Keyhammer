@@ -869,7 +869,35 @@ impl Searcher {
         source: &str,
         mode: HighlightMode,
     ) -> Result<Highlight, HighlightError> {
+        self.highlight_in(trie, cm, q, hit, source, mode)
+    }
+
+    /// [`Searcher::highlight`] on any node source (a [`Trie`] or a validated
+    /// [`Index`](crate::index::Index) view).
+    pub(crate) fn highlight_in<T: Nodes + ?Sized>(
+        &mut self,
+        trie: &T,
+        cm: &CostModel,
+        q: &[u8],
+        hit: &Hit,
+        source: &str,
+        mode: HighlightMode,
+    ) -> Result<Highlight, HighlightError> {
         let len = text::decode(q, &mut self.qsym, MAX_QUERY_LEN);
+        self.run_highlight(trie, cm, len, hit, source, mode)
+    }
+
+    /// [`Searcher::highlight_text`] on any node source.
+    pub(crate) fn highlight_text_in<T: Nodes + ?Sized>(
+        &mut self,
+        trie: &T,
+        cm: &CostModel,
+        q: &str,
+        hit: &Hit,
+        source: &str,
+        mode: HighlightMode,
+    ) -> Result<Highlight, HighlightError> {
+        let len = self.load_text(trie, q);
         self.run_highlight(trie, cm, len, hit, source, mode)
     }
 
@@ -918,14 +946,13 @@ impl Searcher {
         source: &str,
         mode: HighlightMode,
     ) -> Result<Highlight, HighlightError> {
-        let len = self.load_text(trie, q);
-        self.run_highlight(trie, cm, len, hit, source, mode)
+        self.highlight_text_in(trie, cm, q, hit, source, mode)
     }
 
     /// [`Searcher::highlight`] on the `len` symbols in `self.qsym`.
-    fn run_highlight(
+    fn run_highlight<T: Nodes + ?Sized>(
         &mut self,
-        trie: &Trie,
+        trie: &T,
         cm: &CostModel,
         len: usize,
         hit: &Hit,

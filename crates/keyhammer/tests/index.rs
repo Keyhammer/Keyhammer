@@ -10,6 +10,7 @@ mod support;
 
 use fuzz_props::{check_accepted, crc32_reference, fix_crc};
 use keyhammer::cost::{CostModel, Layout};
+use keyhammer::highlight::HighlightMode;
 use keyhammer::index::{FormatError, Index, MAGIC, PROFILE, VERSION};
 use keyhammer::search::{Output, Ranking, SearchConfig, Searcher};
 use keyhammer::text::Normalizer;
@@ -127,6 +128,29 @@ fn assert_same_results(trie: &Trie, ix: &Index<'_>, queries: &[String], cm: &Cos
                     key(s.search_prefix_text(&loaded, cm, q, &cfg).unwrap()),
                     want
                 );
+                // Highlighting a hit of the view equals highlighting it on
+                // the trie (the term is its own source: normalising is
+                // idempotent).
+                for (mode, hits) in [
+                    (
+                        HighlightMode::Whole,
+                        s.search_text(trie, cm, q, &cfg).unwrap().hits,
+                    ),
+                    (HighlightMode::Prefix, want.0),
+                ] {
+                    for hit in &hits {
+                        let src = trie.term(hit.id);
+                        let on_trie = s.highlight_text(trie, cm, q, hit, src, mode);
+                        let on_view = ix.highlight_text(&mut s, cm, q, hit, src, mode);
+                        assert_eq!(on_view, on_trie, "q={q:?} {mode:?}");
+                        assert!(on_view.is_ok());
+                        if trie.normalizer().is_none() {
+                            let b = q.as_bytes();
+                            let on_trie = s.highlight(trie, cm, b, hit, src, mode);
+                            assert_eq!(ix.highlight(&mut s, cm, b, hit, src, mode), on_trie);
+                        }
+                    }
+                }
             }
         }
     }

@@ -231,6 +231,11 @@ impl Searcher {
 }
 ```
 
+A serialized index (`docs/design/index-format.md`) is highlighted the same way through its view:
+`Index::highlight` and `Index::highlight_text` take the `Searcher` and run the same code (the
+highlighter, like the search, is generic over the crate-private node trait), and give the same
+ranges as on the trie that was written (tested in `tests/index.rs`).
+
 `HighlightError` (non-exhaustive): `QueryTooLong` (as for the search), `UnknownTerm` (the hit's
 id is not a term of this trie), `SourceMismatch` (the source does not normalise to the term),
 `CostMismatch` (section 5). The methods never panic, for any input.

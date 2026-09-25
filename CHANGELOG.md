@@ -46,7 +46,8 @@ All notable changes to this project are documented here. The format follows
   section table, 8-byte aligned little-endian sections, CRC-32 of our own) with
   `Trie::to_bytes`, `Trie::from_bytes` and `Index::from_bytes`, a validated zero-copy view that
   can be searched directly (`Index::search`, `search_prefix`, `search_text`,
-  `search_prefix_text`, same results and work counters as the trie) or turned into a `Trie`.
+  `search_prefix_text`, same results and work counters as the trie; `Index::highlight` and
+  `highlight_text` as for the trie) or turned into a `Trie`.
   Validation recomputes the tree shape, labels, term ids and every per-node bound instead of
   trusting them, checks the terms (UTF-8, order, path, normal form) and refuses an index built
   with another normaliser version; it never panics and allocates nothing. Tests: round trips,
