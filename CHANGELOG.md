@@ -20,8 +20,8 @@ All notable changes to this project are documented here. The format follows
   from 18 155 to 19 559 bytes gzip (`gzip -9 -n`, budget 20 480; one machine). All four bindings are
   tested against one expected-results file produced by the core (`bindings/testdata`). A term that
   folds to nothing is an error in the C, Python and Node bindings (only the raw wasm text format
-  skips it). The wasm gzip budget has about 0.7 KB left (19 511 bytes measured by CI on the first
-  commit of the PR, before the next change): the next wasm feature must either shrink the module or
+  skips it). The wasm gzip budget has about 0.75 KB left (19 728 bytes measured by CI on the last commit of the PR, 19 511 on the first
+  one): the next wasm feature must either shrink the module or
   raise `WASM_GZIP_BUDGET` with a stated reason.
 - **Breaking (0.x):** the search alphabet is Unicode code points instead of UTF-8 bytes (issue #19).
   Terms are split into `char`s and byte queries are decoded as UTF-8 (a byte that is not valid

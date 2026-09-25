@@ -76,7 +76,7 @@ with `gzip -9 -n` (what the CI size gate measures; the budget is 20 480), agains
 42 506 and 18 155 before the normaliser was linked (+1 404 bytes gzip); the test
 prints the raw size and Node's zlib level 9 figure, which is a little larger
 (19 805). The increase is the folding tables and the code of the normaliser. The CI job
-measured 19 511 bytes for the first commit of that change (the local figure is
+measured 19 728 bytes for the last commit of that change (19 511 for the first; the local figure is
 about 50 bytes higher); the budget has under 1 KB left, so the next feature that
 grows the module must either shrink it elsewhere or raise `WASM_GZIP_BUDGET` in
 `ci.yml` with a stated reason. The largest parts are the index build and the search with
