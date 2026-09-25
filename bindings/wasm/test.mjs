@@ -147,6 +147,7 @@ check('unicode build', build('São Paulo\t9\nAção\t1\nação\t8\nStraße\t7\n�
   check('unicode query at limit', search('é'.repeat(128)).n !== ERR);
   check('unicode query too long', search('é'.repeat(129)).n === ERR);
   check('folded length counts', search('ß'.repeat(65)).n === ERR);
+  check('decomposed accents count once', search('e\u0301'.repeat(100)).n !== ERR);
   check('invalid utf-8 is still an error', (() => {
     const p = kh.kh_alloc(2);
     new Uint8Array(kh.memory.buffer, p, 2).set([0xc3, 0x28]);

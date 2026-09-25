@@ -86,7 +86,7 @@ fn build_search_free() {
 }
 
 #[test]
-fn ascii_is_lowercased_and_duplicates_keep_highest_weight() {
+fn duplicates_after_folding_keep_the_highest_weight() {
     let mut idx = build(&[entry("Hello", 1), entry("hello", 7)]);
     let (s, mut r) = search(idx, b"HELLO", ptr::null());
     assert_eq!(s, kh_status::KH_OK);
@@ -283,6 +283,12 @@ fn other_null_checks() {
 fn layout_has_no_implicit_padding() {
     assert_eq!(size_of::<kh_config>(), 32);
     assert_eq!(core::mem::offset_of!(kh_config, reserved) + 4, 32);
+    // kh_hit: input_index is the last field and ends the struct exactly on
+    // 64-bit targets (it fills what was tail padding in version 1).
+    assert_eq!(
+        core::mem::offset_of!(kh_hit, input_index),
+        2 * size_of::<usize>() + 12
+    );
 }
 
 #[test]
@@ -361,7 +367,7 @@ fn search_hits(
 #[test]
 fn abi_is_version_2_with_input_index() {
     assert_eq!(KH_ABI_VERSION, 2);
-    // Appending a u32 to kh_hit must not add tail padding on any target.
+    // kh_hit is two words and four u32 with no padding, on 32 and 64 bits.
     let words = 2 * size_of::<usize>() + 4 * size_of::<u32>();
     assert_eq!(size_of::<kh_hit>(), words);
     assert_eq!(KH_MAX_QUERY_BYTES, 4 * KH_MAX_QUERY_LEN);
@@ -458,6 +464,12 @@ fn query_limit_counts_code_points_after_normalisation() {
         search(idx, sharp.as_bytes(), ptr::null()).0,
         kh_status::KH_ERR_QUERY_TOO_LONG
     );
+    // 200 code points as given, 100 once the accents are dropped: accepted.
+    let decomposed = "e\u{301}".repeat(100);
+    assert_eq!(
+        search(idx, decomposed.as_bytes(), ptr::null()).0,
+        kh_status::KH_OK
+    );
     // 128 four-byte code points is exactly KH_MAX_QUERY_BYTES: accepted.
     let wide = "😀".repeat(KH_MAX_QUERY_LEN);
     assert_eq!(wide.len(), KH_MAX_QUERY_BYTES);
@@ -494,12 +506,17 @@ fn invalid_utf8_and_empty_normalised_terms_are_errors() {
     );
     assert!(idx.is_null());
     // A lone combining acute accent folds to nothing.
-    let e = [entry("\u{301}", 1)];
+    let e = [entry("ok", 1), entry("\u{301}\u{302}", 1)];
     assert_eq!(
-        unsafe { kh_index_build(e.as_ptr(), 1, &mut idx) },
+        unsafe { kh_index_build(e.as_ptr(), 2, &mut idx) },
         kh_status::KH_ERR_EMPTY_TERM
     );
     assert!(idx.is_null());
+    assert!(last_error().contains("entry 1: term normalises to nothing"));
+    // With the diacritic folding off nothing folds to nothing.
+    let s = unsafe { kh_index_build_ex(e.as_ptr(), 2, KH_NORM_KEEP_DIACRITICS, &mut idx) };
+    assert_eq!(s, kh_status::KH_OK);
+    unsafe { kh_index_free(&mut idx) };
 }
 
 const DICT: &str = include_str!("../../testdata/unicode_dict.tsv");

@@ -66,7 +66,7 @@ struct State {
     trie: Option<Trie>,
     /// The terms as given (trimmed), in the order of the lines kept, so that
     /// `Trie::input_index` maps a hit back to its original text.
-    originals: Vec<String>,
+    originals: Vec<Box<str>>,
     costs: CostModel,
     searcher: Searcher,
     results: String,
@@ -198,7 +198,12 @@ pub unsafe extern "C" fn kh_build(ptr: *const u8, len: u32) -> u32 {
         match Trie::build_normalized(&items, &normalizer) {
             Ok(trie) => {
                 let n = u32::try_from(trie.len()).unwrap_or(u32::MAX);
-                s.originals = items.iter().map(|(t, _)| String::from(*t)).collect();
+                s.originals = (0..trie.len())
+                    .map(|id| {
+                        let i = trie.input_index(u32::try_from(id).unwrap_or(u32::MAX)) as usize;
+                        items.get(i).map_or("", |t| t.0).into()
+                    })
+                    .collect();
                 s.trie = Some(trie);
                 n
             }
@@ -280,8 +285,8 @@ pub unsafe extern "C" fn kh_search(
         r.push(if out.stats.truncated { '1' } else { '0' });
         r.push('\n');
         for hit in &out.hits {
-            let original = s.originals.get(trie.input_index(hit.id) as usize);
-            r.push_str(original.map_or_else(|| trie.term(hit.id), String::as_str));
+            let original = s.originals.get(hit.id as usize);
+            r.push_str(original.map_or_else(|| trie.term(hit.id), |t| &**t));
             r.push('\t');
             push_u64(r, u64::from(hit.cost));
             r.push('\t');

@@ -291,7 +291,9 @@ enum kh_status kh_index_build(const struct kh_entry *entries,
  default), `KH_NORM_KEEP_CASE` and `KH_NORM_KEEP_DIACRITICS` (ORed) turn a
  folding off. Queries are normalised the same way as the terms. Any other
  bit fails with `KH_ERR_INVALID_ARGUMENT`; the other failures are those of
- `kh_index_build`.
+ `kh_index_build`. With `KH_NORM_KEEP_DIACRITICS` there is no Unicode
+ composition: `é` (one code point) and `e` followed by U+0301 differ, and
+ the second costs an extra edit.
 
  # Safety
 

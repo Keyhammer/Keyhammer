@@ -62,12 +62,6 @@ function wellFormed(s) {
 
 const TOKEN = Symbol('Index.build');
 
-function codePoints(s) {
-  let n = 0;
-  for (const _ of s) n++; // eslint-disable-line no-unused-vars
-  return n;
-}
-
 function isU(n, max) {
   return Number.isInteger(n) && n >= 0 && n <= max;
 }
@@ -95,6 +89,11 @@ function line(entry, i) {
   }
   if (!wellFormed(term)) {
     throw new TypeError(`terms[${i}]: a term must be well-formed UTF-16 (no lone surrogates)`);
+  }
+  // Combining marks U+0300 to U+036F are dropped by the default folding, so a
+  // term made only of them would be empty.
+  if (/^[\u0300-\u036F]+$/.test(term)) {
+    throw new RangeError(`terms[${i}]: the term folds to nothing (only combining marks)`);
   }
   if (encoder.encode(term).length > MAX_TERM_BYTES) {
     throw new RangeError(`terms[${i}]: a term is limited to ${MAX_TERM_BYTES} UTF-8 bytes`);
@@ -126,7 +125,7 @@ export class Index {
    * Case and diacritics are folded (`São Paulo` is stored as `sao paulo`,
    * `Straße` as `strasse`); terms equal after folding are merged, keeping the
    * highest weight (then the first). Hits return the term as given here.
-   * A term that folds to nothing (only combining marks) is skipped.
+   * A term that folds to nothing (only combining marks) is a `RangeError`.
    */
   static build(terms) {
     if (terms === null || typeof terms !== 'object' || typeof terms[Symbol.iterator] !== 'function') {
@@ -164,11 +163,13 @@ export class Index {
     if (!isU(budget, MAX_BUDGET)) throw new RangeError(`budget must be an integer from 0 to ${MAX_BUDGET}`);
     if (!Object.hasOwn(RANKINGS, ranking)) throw new TypeError("ranking must be 'coarse' or 'exact'");
     if (!wellFormed(query)) throw new TypeError('query must be well-formed UTF-16 (no lone surrogates)');
-    // A cheap pre-check on the code points as given (at most 4 UTF-8 bytes
-    // each), so that a huge string is not copied into WebAssembly memory.
+    // Only a byte pre-check here (128 code points are at most 512 UTF-8
+    // bytes), so that a huge string is not copied into WebAssembly memory. The
+    // limit itself is counted by the engine after folding: a decomposed
+    // accent (e + U+0301) is two code points as given and one after folding.
     const data = encoder.encode(query);
-    if (data.length > MAX_QUERY_LENGTH * 4 || codePoints(query) > MAX_QUERY_LENGTH) {
-      throw new RangeError(`query is limited to ${MAX_QUERY_LENGTH} code points`);
+    if (data.length > MAX_QUERY_LENGTH * 4) {
+      throw new RangeError(`query is limited to ${MAX_QUERY_LENGTH} code points (at most ${MAX_QUERY_LENGTH * 4} UTF-8 bytes)`);
     }
     const kh = this.#kh;
     const n = withBuffer(kh, data, (ptr, len) => kh.kh_search(ptr, len, k, budget, RANKINGS[ranking])) >>> 0;

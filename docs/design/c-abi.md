@@ -37,7 +37,10 @@ kh_index_free(&idx);
   `sao paulo` and `ACAO` finds `ação`; `kh_index_build_ex` takes flags
   (`KH_NORM_KEEP_CASE`, `KH_NORM_KEEP_DIACRITICS`) to turn either off, and
   `kh_index_build` is `kh_index_build_ex` with no flags. Terms that are equal
-  after normalisation are merged (highest weight, then the first).
+  after normalisation are merged (highest weight, then the first). A term that
+  normalises to nothing is `KH_ERR_EMPTY_TERM` ("entry i: term normalises to
+  nothing"). With `KH_NORM_KEEP_DIACRITICS` there is no Unicode composition:
+  `é` and `e` + U+0301 differ (the second costs an extra edit).
 - **Hits return the caller's text.** `kh_hit.term` is the entry as it was given
   to the build (original case and accents), not the normalised form, and
   `kh_hit.input_index` is the position of that entry in the `kh_entry` array.
@@ -114,6 +117,15 @@ released, but the rule is applied as if it had been):
 - `kh_hit.term` is the caller's original text, no longer the ASCII-lower-cased
   one, and `kh_hit` gained the appended field `input_index` (an output struct,
   so this is a bump, not an additive change: rule 3).
+- Consequence for an old caller (built against version 1) that skips the
+  `kh_abi_version` check, which is mandatory: `sizeof(kh_hit)` is 32 on 64-bit
+  targets in both versions (`input_index` fills what was tail padding), so the
+  array stride is still right and such a caller keeps working, but `term` now
+  has the new meaning (original text). On 32-bit targets `sizeof(kh_hit)` grows
+  from 20 to 24 bytes, so an old caller would read hits at the wrong stride,
+  which is undefined behaviour. A `hit_size` field in `kh_results`, which would
+  make the next appended field to `kh_hit` not a bump, is a follow-up (an
+  output struct is not extended in place under rule 3).
 - `KH_MAX_QUERY_LEN` (128) counts code points after normalisation, no longer
   bytes. It accepts more inputs than before, but it is a constant whose
   meaning changed (rule 1). The new `KH_MAX_QUERY_BYTES` (4 x 128) bounds the

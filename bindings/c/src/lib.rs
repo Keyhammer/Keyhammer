@@ -198,8 +198,8 @@ pub struct kh_results {
 /// `kh_index_free`.
 pub struct kh_index {
     trie: Trie,
-    /// The terms as given, by entry position (`Trie::input_index`).
-    originals: Vec<String>,
+    /// The kept entries' terms as given, by term id.
+    originals: Vec<Box<str>>,
     costs: CostModel,
 }
 
@@ -375,7 +375,9 @@ pub unsafe extern "C" fn kh_index_build(
 /// default), `KH_NORM_KEEP_CASE` and `KH_NORM_KEEP_DIACRITICS` (ORed) turn a
 /// folding off. Queries are normalised the same way as the terms. Any other
 /// bit fails with `KH_ERR_INVALID_ARGUMENT`; the other failures are those of
-/// `kh_index_build`.
+/// `kh_index_build`. With `KH_NORM_KEEP_DIACRITICS` there is no Unicode
+/// composition: `é` (one code point) and `e` followed by U+0301 differ, and
+/// the second costs an extra edit.
 ///
 /// # Safety
 ///
@@ -449,6 +451,12 @@ pub unsafe extern "C" fn kh_index_build_ex(
                     format!("entry {i}: term is longer than 65535 bytes"),
                 );
             }
+            if normalizer.normalize(s).is_empty() {
+                return fail(
+                    kh_status::KH_ERR_EMPTY_TERM,
+                    format!("entry {i}: term normalises to nothing"),
+                );
+            }
             terms.push((s, e.weight));
         }
         let trie = match Trie::build_normalized(&terms, &normalizer) {
@@ -467,9 +475,15 @@ pub unsafe extern "C" fn kh_index_build_ex(
             }
             Err(e) => return fail(kh_status::KH_ERR_INVALID_ARGUMENT, e.to_string()),
         };
+        let originals: Vec<Box<str>> = (0..trie.len())
+            .map(|id| {
+                let i = trie.input_index(u32::try_from(id).unwrap_or(u32::MAX)) as usize;
+                terms.get(i).map_or("", |t| t.0).into()
+            })
+            .collect();
         let index = Box::new(kh_index {
             trie,
-            originals: terms.iter().map(|(t, _)| String::from(*t)).collect(),
+            originals,
             costs: CostModel::qwerty(),
         });
         // SAFETY: `out` is valid for writing (see above).
@@ -662,8 +676,8 @@ pub unsafe extern "C" fn kh_search(
                 let i = index.trie.input_index(h.id);
                 let t = index
                     .originals
-                    .get(i as usize)
-                    .map_or_else(|| index.trie.term(h.id), String::as_str);
+                    .get(h.id as usize)
+                    .map_or_else(|| index.trie.term(h.id), |t| &**t);
                 kh_hit {
                     term: t.as_ptr(),
                     term_len: t.len(),

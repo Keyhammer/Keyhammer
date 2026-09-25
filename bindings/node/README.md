@@ -31,9 +31,11 @@ cities.search('strasse').hits[0].term;   // 'Straße'
 
 Invalid arguments throw `TypeError` (wrong type, unknown `ranking`) or
 `RangeError` (empty dictionary, empty term or a term with a tab or line break,
-weight outside 0 to 65535, `k` not a non-negative integer, `budget` above 64,
-query over 128 code points, or over 128 after folding, where `ß` counts as two)
-before or by the engine's refusal. `KeyhammerError` is
+weight outside 0 to 65535, a term that folds to nothing (only combining marks),
+`k` not a non-negative integer, `budget` above 64, query over 128 code points
+counted after folding, where `ß` counts as two and a decomposed accent as one
+letter; input over 512 UTF-8 bytes is refused before it is copied).
+`KeyhammerError` is
 for what still comes back as a failure from the engine, and for a missing
 `keyhammer.wasm`. The mapping from the module's `u32::MAX` and `0` returns is
 in `index.js`.
@@ -61,7 +63,8 @@ changed silently.
 Those of the WebAssembly build (`bindings/wasm/README.md`): case and
 diacritics are folded with the core's default normaliser (Latin-1 and Latin
 Extended-A; no option to turn it off, no Greek or Cyrillic case folding), a
-term that folds to nothing is skipped (an error if it is the only one), provisional
+term that folds to nothing is a `RangeError` (as in the C and Python bindings; only the raw
+wasm text format skips such lines), provisional
 costs, no `tsb` option (the subtree bound is off), and a linear memory that
 does not shrink. Every `Index` has its own WebAssembly instance, so many small
 indexes cost more memory than one; searches are synchronous and run on the

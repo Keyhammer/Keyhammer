@@ -61,7 +61,8 @@ kh.SearchConfig.high_recall()                   # the core's opt-in preset (budg
 - `Ranking.COARSE` and `Ranking.EXACT` are the core's two orderings.
 - Errors are exceptions, all subclasses of `keyhammer.KeyhammerError`, itself a
   `ValueError`. `BuildError`: empty input, a term that is empty (or folds to
-  nothing, such as a lone combining accent) or over-long, weight out of range,
+  nothing, such as a lone combining accent, reported as `entry i: term
+  normalises to nothing`) or over-long, weight out of range,
   or a term that is not valid Unicode (a lone surrogate, which cannot be
   encoded as UTF-8). `SearchError` for a rejected search, with the subclasses
   `QueryTooLongError` (query over 128 code points after normalisation; `ß`
@@ -81,7 +82,10 @@ kh.SearchConfig.high_recall()                   # the core's opt-in preset (budg
   keys of the core's layouts (not exposed here); results on them are not tuned
   or measured. The costs of non-ASCII substitutions are the default ones (a
   substitution of `é` by `e` costs nothing after folding, but `é` by `è` with
-  diacritic folding off is an ordinary edit).
+  diacritic folding off is an ordinary edit). With `fold_diacritics=False`
+  there is no Unicode composition: `é` (one code point) and `e` followed by
+  U+0301 differ, and the second costs an extra edit (32 for a whole-term
+  query at the default costs).
 - **Build once, no changes.** The issue asks for add, remove and export. The
   core has no overlay for insertions and deletions (#31) and no serialisation
   (#26), so the binding has none of them either: to change the dictionary,

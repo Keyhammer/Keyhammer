@@ -3,7 +3,7 @@
 
 /** Cost of one ordinary edit in the engine's fixed-point costs. */
 export const COST_PER_EDIT: 16;
-/** Largest accepted query, in code points (counted after case and diacritic folding by the engine). */
+/** Largest accepted query, in code points counted after case and diacritic folding (by the engine; `ß` counts as two, a decomposed accent as one letter). Input over 4 x this many UTF-8 bytes is refused at once. */
 export const MAX_QUERY_LENGTH: 128;
 /** Largest accepted budget. */
 export const MAX_BUDGET: 64;

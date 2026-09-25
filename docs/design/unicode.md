@@ -309,11 +309,15 @@ No binding code was changed with the core (issue #19). The bindings use it since
   folding off. `KH_MAX_QUERY_LEN` counts code points after normalisation (the core's limit),
   with a new `KH_MAX_QUERY_BYTES` (512) bound before decoding; `kh_hit.term` is the original text
   and `kh_hit` gained `input_index`, so the ABI version is 2 (`docs/design/c-abi.md`).
-- **Python**: the non-ASCII refusal is lifted; `Index(items, fold_case=True,
+- **Python**: the non-ASCII refusal is lifted; `Index(items, *, fold_case=True,
   fold_diacritics=True)`; `Hit.term` is the original text and `Hit.index` the input position.
 
 Terms that are equal after normalisation are merged (highest weight, then first) in every
-binding. The bindings' tests read the same dictionary, queries and expected hits
+binding. A term that normalises to nothing (in the default mode: only combining marks
+U+0300 to U+036F) is an error in every typed API, naming the entry (C `KH_ERR_EMPTY_TERM`
+"entry i: term normalises to nothing", Python `BuildError`, Node `RangeError`); only the raw
+wasm text format skips such lines, as it already skips other malformed lines. The query limit
+is counted on the normalised query in every binding (Node only pre-checks the UTF-8 size). The bindings' tests read the same dictionary, queries and expected hits
 (`bindings/testdata`), whose expected file is produced by the core and checked for freshness
 by `cargo test -p keyhammer-c`.
 

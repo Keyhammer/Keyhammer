@@ -209,9 +209,9 @@ test('hits return the original text; terms equal after folding merge', () => {
   assert.equal(Index.build(['Café']).search('cafe').hits[0].cost, 0); // decomposed accent
 });
 
-test('a term that folds to nothing is skipped', () => {
-  assert.equal(Index.build(['́', 'ok']).size, 1);
-  assert.throws(() => Index.build(['́']), KeyhammerError);
+test('a term that folds to nothing is an error naming the entry', () => {
+  assert.throws(() => Index.build(['ok', '\u0301\u0302']), { name: 'RangeError', message: /terms\[1\].*folds to nothing/ });
+  assert.throws(() => Index.build(['\u0301']), RangeError);
 });
 
 test('the query limit counts code points', () => {
@@ -220,6 +220,8 @@ test('the query limit counts code points', () => {
   assert.doesNotThrow(() => index.search('\u{1F600}'.repeat(MAX_QUERY_LENGTH)));
   assert.throws(() => index.search('é'.repeat(MAX_QUERY_LENGTH + 1)), RangeError);
   assert.throws(() => index.search('ß'.repeat(65)), RangeError, 'folds to 130 letters');
+  // Over the limit as given (200 code points), within it after folding (100).
+  assert.doesNotThrow(() => index.search('e\u0301'.repeat(100)));
   assert.throws(() => index.search('a'.repeat(100000)), RangeError);
 });
 

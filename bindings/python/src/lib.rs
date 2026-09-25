@@ -253,8 +253,8 @@ impl SearchResult {
 #[pyclass(module = "keyhammer", frozen)]
 struct Index {
     trie: Trie,
-    /// The terms as given, by position in `items` (`Trie::input_index`).
-    originals: Vec<String>,
+    /// The kept entries' terms as given, by term id.
+    originals: Vec<Box<str>>,
     costs: CostModel,
 }
 
@@ -270,8 +270,11 @@ impl Index {
         fold_case: bool,
         fold_diacritics: bool,
     ) -> PyResult<Self> {
+        let normalizer = Normalizer::new()
+            .with_case_folding(fold_case)
+            .with_diacritic_folding(fold_diacritics);
         let mut owned: Vec<(String, u16)> = Vec::new();
-        for item in items.try_iter()? {
+        for (i, item) in items.try_iter()?.enumerate() {
             let (term, weight): (Bound<'_, PyAny>, Bound<'_, PyAny>) =
                 item?.extract().map_err(|_| {
                     PyTypeError::new_err("items must be (term: str, weight: int) pairs")
@@ -295,11 +298,13 @@ impl Index {
                 Err(e) => return Err(e),
             };
             let weight = to_u16("weight", weight).map_err(BuildError::new_err)?;
+            if !term.is_empty() && normalizer.normalize(&term).is_empty() {
+                return Err(BuildError::new_err(format!(
+                    "entry {i}: term normalises to nothing"
+                )));
+            }
             owned.push((term, weight));
         }
-        let normalizer = Normalizer::new()
-            .with_case_folding(fold_case)
-            .with_diacritic_folding(fold_diacritics);
         let trie = py
             .detach(|| {
                 let refs: Vec<(&str, u16)> = owned.iter().map(|(t, w)| (t.as_str(), *w)).collect();
@@ -307,8 +312,13 @@ impl Index {
             })
             .map_err(|e| BuildError::new_err(e.to_string()))?;
         Ok(Self {
+            originals: (0..trie.len())
+                .map(|id| {
+                    let i = trie.input_index(u32::try_from(id).unwrap_or(u32::MAX)) as usize;
+                    owned.get(i).map_or("", |t| t.0.as_str()).into()
+                })
+                .collect(),
             trie,
-            originals: owned.into_iter().map(|(t, _)| t).collect(),
             costs: CostModel::qwerty(),
         })
     }
@@ -373,8 +383,8 @@ impl Index {
                 .map(|h| Hit {
                     term: self
                         .originals
-                        .get(self.trie.input_index(h.id) as usize)
-                        .map_or_else(|| self.trie.term(h.id), String::as_str)
+                        .get(h.id as usize)
+                        .map_or_else(|| self.trie.term(h.id), |t| &**t)
                         .to_owned(),
                     cost: h.cost,
                     weight: h.weight,

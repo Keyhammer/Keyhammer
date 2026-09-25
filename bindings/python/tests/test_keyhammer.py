@@ -289,6 +289,8 @@ def test_query_limit_counts_code_points_after_normalisation():
         idx.search("é" * 129)
     with pytest.raises(kh.QueryTooLongError):
         idx.search("ß" * 65)  # folds to 130 letters
+    # over the limit as given (200 code points), within it once folded (100)
+    idx.search("e\u0301" * 100)
 
 
 def test_lone_surrogates_are_rejected_with_a_clear_message():
@@ -300,8 +302,10 @@ def test_lone_surrogates_are_rejected_with_a_clear_message():
 
 
 def test_a_term_that_folds_to_nothing_is_a_build_error():
-    with pytest.raises(kh.BuildError):
-        kh.Index([("\u0301", 1)])
+    with pytest.raises(kh.BuildError, match="entry 1: term normalises to nothing"):
+        kh.Index([("ok", 1), ("\u0301\u0302", 1)])
+    # with the diacritic folding off nothing folds to nothing
+    assert len(kh.Index([("\u0301", 1)], fold_diacritics=False)) == 1
     # decomposed input equals precomposed input
     assert kh.Index([("Cafe\u0301", 1)]).search("cafe").hits[0].cost == 0
 
