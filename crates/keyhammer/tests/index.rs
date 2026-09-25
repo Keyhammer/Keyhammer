@@ -857,3 +857,38 @@ fn a_terminal_node_without_a_term_of_its_own_is_counted() {
         }
     );
 }
+
+/// The normaliser record is payload (design note, section 5.4): a changed
+/// mode byte is accepted and changes what `search_text` finds, and removing
+/// the record is accepted too. Callers compare `normalizer()` themselves.
+#[test]
+fn the_normaliser_is_the_files_and_callers_must_check_it() {
+    let trie = build(&[("cafe", 1)], Some(Normalizer::new()));
+    let good = trie.to_bytes().unwrap();
+    let cm = CostModel::qwerty();
+    let cfg = SearchConfig {
+        budget: 0,
+        ..SearchConfig::default()
+    };
+    let hits = |b: &[u8]| {
+        let ix = Index::from_bytes(b).unwrap();
+        ix.search_text(&mut Searcher::new(), &cm, "café", &cfg)
+            .unwrap()
+            .hits
+            .len()
+    };
+    assert_eq!(hits(&good), 1);
+    // Mode byte 3 (case and diacritics) -> 1 (case only).
+    let mut case_only = good.clone();
+    case_only[44] = 1;
+    fix_crc(&mut case_only);
+    let ix = Index::from_bytes(&case_only).unwrap();
+    assert_ne!(ix.normalizer(), Some(Normalizer::new()));
+    assert_eq!(hits(&case_only), 0);
+    // No normaliser at all.
+    let mut plain = good.clone();
+    plain[12] = 0;
+    plain[44..51].fill(0);
+    fix_crc(&mut plain);
+    assert_eq!(Index::from_bytes(&plain).unwrap().normalizer(), None);
+}

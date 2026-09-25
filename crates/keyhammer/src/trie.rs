@@ -550,6 +550,11 @@ impl Trie {
     /// Validates `bytes` (see [`Index::from_bytes`](crate::index::Index::from_bytes))
     /// and builds an owned trie from them. The result equals the trie that was
     /// written: same terms, ids, weights, input indices, normaliser and nodes.
+    ///
+    /// The file's weights, input indices and normaliser are the writer's
+    /// choice (`docs/design/index-format.md`, section 5.4): input indices may
+    /// be duplicated or out of range for your items (bounds-check before
+    /// indexing), and [`Trie::normalizer`] is the one recorded in the file.
     pub fn from_bytes(bytes: &[u8]) -> Result<Trie, FormatError> {
         crate::index::Index::from_bytes(bytes).map(|ix| ix.to_trie())
     }

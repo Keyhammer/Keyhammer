@@ -214,12 +214,26 @@ search per code point of each term (at most `log2` of the fan-out, which is smal
 After steps 1 to 18, the view is byte for byte what `to_bytes` writes for
 `Trie::build(terms with weights)` (or `build_normalized` with the recorded normaliser), except
 for the input indices: section 9 holds whatever the writer put there, as long as it is not
-`0xFFFFFFFF`. So three fields are **payload**: a weight, an input index, and the normaliser's
-mode bits can be changed without breaking the structure, and the loader accepts such a
-change (after the CRC is fixed) when it stays consistent: a weight change that alters a
-`max_weight` on its path is rejected by step 12, a mode change that leaves a term
-unnormalised by step 17. Uniqueness of input indices is not checked (it would need memory
-proportional to the largest index); a duplicated input index changes nothing in the search.
+`0xFFFFFFFF`. So three things are **payload**: the weights, the input indices and the whole
+normaliser record (flag bit 0 and bytes 44 to 50). They can be changed without breaking the
+structure, and the loader accepts such a change (after the CRC is fixed) when it stays
+consistent: a weight change that alters a `max_weight` on its path is rejected by step 12, a
+normaliser change that leaves a term unnormalised by step 17. In particular:
+
+- **The normaliser is the file's, not the caller's.** Clearing flag bit 0 and zeroing bytes 44
+  to 50 turns a normalised index into a plain one, and the loader accepts it; the reverse is
+  accepted too when the terms are already in normal form, and so is a changed mode byte.
+  `search_text` on the view (and on `to_trie`) folds queries with the normaliser recorded in
+  the file, so such a change changes results: on an index of `cafe` built with the default
+  normaliser, `search_text("café")` at budget 0 has 1 hit; with the mode byte changed to case
+  folding only, it has 0. The CRC is not authentication: anyone who can write the file can
+  recompute it. A caller that needs a specific folding must compare `Index::normalizer()` with
+  the value it expects (`index.normalizer() == Some(expected)`) before searching, or
+  authenticate the file itself (a signature or an HMAC over the bytes).
+- **Input indices are untrusted writer data.** Uniqueness is not checked (it would need memory
+  proportional to the largest index), nor any upper bound (the loader does not know how many
+  items the writer had). The core never reads them; a caller that does `items[input_index]`
+  must bounds-check.
 
 ## 6. Policy for corrupt and hostile input, and how it is tested
 
@@ -233,7 +247,7 @@ proportional to the largest index); a duplicated input index changes nothing in 
   checks that the view's search results, in both modes and both rankings, equal those of a
   trie rebuilt from the view's own term list, weights and normaliser, that `to_trie` followed
   by `to_bytes` gives back the mutated bytes exactly, and that the accepted byte lay in a
-  payload field (a weight, an input index or the normaliser mode byte).
+  payload field (a weight, an input index or the normaliser record).
 - **Arbitrary bytes.** A fuzz target (`index_from_bytes`) and its seeded stand-in in
   `tests/fuzz_like.rs` feed arbitrary and mutated files; `from_bytes` never panics, and when it
   accepts, searching the view never panics and matches `to_trie`.
@@ -282,8 +296,10 @@ and puts a trait into the public API before a second implementation outside the 
 
 ## 9. Not done
 
-- The bindings (wasm, Node, Python, C) do not expose the format yet (follow-up).
+- The bindings (wasm, Node, Python, C) do not expose the format yet (follow-up). When they
+  do, they must treat `input_index` after a load as untrusted (bounds-check it before indexing
+  the caller's items) and let the caller check the recorded normaliser (section 5.4).
 - No memory mapping helper: the caller reads the file into a buffer (or maps it) and passes
   the slice. Nothing here needs `std`.
 - No compression and no compact profile; no incremental update of a stored index.
-- Uniqueness of input indices is not validated (section 5.4).
+- Uniqueness and range of input indices are not validated (section 5.4).

@@ -653,7 +653,14 @@ impl<'a> Index<'a> {
         self.nodes as usize
     }
 
-    /// The normaliser the trie was built with, as [`Trie::normalizer`].
+    /// The normaliser recorded in the file, as [`Trie::normalizer`]; the
+    /// text searches of the view fold queries with it.
+    ///
+    /// It is part of the file's payload (`docs/design/index-format.md`,
+    /// section 5.4): whoever wrote the file chose it, and the CRC is not
+    /// authentication. If you need a specific folding, compare it before
+    /// searching (`index.normalizer() == Some(expected)`), or authenticate
+    /// the file yourself (a signature or an HMAC over the bytes).
     pub fn normalizer(&self) -> Option<Normalizer> {
         self.normalizer
     }
@@ -677,6 +684,11 @@ impl<'a> Index<'a> {
     }
 
     /// As [`Trie::input_index`]: `u32::MAX` for an unknown id.
+    ///
+    /// After a load this is untrusted writer data: the loader only checks
+    /// that it is not `u32::MAX`, so values may be duplicated or larger than
+    /// the item list you hold (the core never reads them). Bounds-check it
+    /// before indexing your items.
     pub fn input_index(&self, id: u32) -> u32 {
         if id < self.terms {
             rd_u32(self.sec[INPUT_INDEX], id as usize)

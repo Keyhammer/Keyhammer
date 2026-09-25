@@ -81,3 +81,6 @@ The node and row counts are those of the owned trie too (asserted per query).
   unit it was about 3% faster (657 against 677 ms). The sign follows the codegen partition,
   so this is read as noise of code placement, not as a cost of the change; it is not a
   controlled measurement (the load reading was about 90% during these runs).
+- **WebAssembly module.** `keyhammer-wasm` built with the `wasm` profile and the CI path remap,
+  gzipped as in the CI size gate: 18 169 bytes on `main` against 18 175 on this branch (no
+  meaningful change; the module does not use the format).
