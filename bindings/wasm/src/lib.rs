@@ -16,20 +16,26 @@
 //!   fills with UTF-8 bytes (dictionary text or a query) and frees afterwards
 //!   with the same length.
 //! - [`kh_build`]: builds the index from UTF-8 text, one term per line with an
-//!   optional `TAB weight` (a `u16`, default 0). ASCII letters are lower-cased.
-//!   Lines that are empty, longer than 65535 bytes, or whose weight is not a
-//!   `u16` are skipped. Other characters are kept as they are and compared
-//!   per code point (no case or diacritic folding beyond ASCII). Returns
-//!   the number of distinct terms loaded (duplicates keep the highest
-//!   weight), or 0 on failure, in which case there is no index any more.
+//!   optional `TAB weight` (a `u16`, default 0). Terms are compared after
+//!   the core's default normalisation (`keyhammer::text::Normalizer::new`:
+//!   case folding and diacritic folding, so `São Paulo` is `sao paulo` and
+//!   `Straße` is `strasse`). Lines that are empty, longer than 65535 bytes,
+//!   whose weight is not a `u16`, or that normalise to nothing (only
+//!   combining marks) or to more than 65535 bytes are skipped. Terms that are equal
+//!   after normalisation are merged (highest weight, then first). Returns
+//!   the number of distinct terms loaded, or 0 on failure, in which case
+//!   there is no index any more.
 //! - [`kh_search`]: runs a search; returns the number of hits, or `u32::MAX`
-//!   on error (no index, query longer than 128 code points, budget too large,
-//!   unknown ranking, invalid UTF-8).
+//!   on error (no index, query longer than 128 code points after
+//!   normalisation (a `ß` counts as two), budget too large, unknown ranking,
+//!   invalid UTF-8). The query is normalised like the terms.
 //! - [`kh_results_ptr`] / [`kh_results_len`]: the text of the last search, in
 //!   UTF-8. The first line is a header, `nodes_expanded TAB truncated` (the
 //!   number of trie nodes expanded and `1` if the node limit stopped the
 //!   search early, else `0`). Then one line per hit, best first:
-//!   `term TAB cost TAB weight`, where `cost` is the exact fixed-point cost
+//!   `term TAB cost TAB weight`, where `term` is the dictionary text as it was
+//!   given to [`kh_build`] (original case and accents; for merged terms, the
+//!   entry that was kept), not the normalised form, and where `cost` is the exact fixed-point cost
 //!   (16 = one ordinary edit). Every line ends with `\n`. After an error the
 //!   text is empty. The pointer is valid until the next call to
 //!   [`kh_build`] or [`kh_search`].
@@ -50,6 +56,7 @@ use core::cell::RefCell;
 
 use keyhammer::cost::CostModel;
 use keyhammer::search::{Ranking, SearchConfig, Searcher};
+use keyhammer::text::Normalizer;
 use keyhammer::trie::Trie;
 
 /// Returned by [`kh_search`] on error.
@@ -57,6 +64,9 @@ const ERROR: u32 = u32::MAX;
 
 struct State {
     trie: Option<Trie>,
+    /// The terms as given (trimmed), in the order of the lines kept, so that
+    /// `Trie::input_index` maps a hit back to its original text.
+    originals: Vec<Box<str>>,
     costs: CostModel,
     searcher: Searcher,
     results: String,
@@ -65,6 +75,7 @@ struct State {
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State {
         trie: None,
+        originals: Vec::new(),
         costs: CostModel::qwerty(),
         searcher: Searcher::new(),
         results: String::new(),
@@ -168,15 +179,31 @@ pub unsafe extern "C" fn kh_build(ptr: *const u8, len: u32) -> u32 {
     let input = unsafe { bytes(ptr, len) };
     with_state(|s| {
         s.trie = None;
+        s.originals.clear();
         s.results.clear();
         let Some(text) = input.and_then(|b| core::str::from_utf8(b).ok()) else {
             return 0;
         };
-        let text = text.to_ascii_lowercase();
-        let items: Vec<(&str, u16)> = text.lines().filter_map(parse_line).collect();
-        match Trie::build(&items) {
+        let normalizer = Normalizer::new();
+        // Lines that normalise to nothing (or to too much) are skipped here,
+        // because the core rejects the whole build for them.
+        let items: Vec<(&str, u16)> = text
+            .lines()
+            .filter_map(parse_line)
+            .filter(|(t, _)| {
+                let n = normalizer.normalize(t);
+                !n.is_empty() && n.len() <= usize::from(u16::MAX)
+            })
+            .collect();
+        match Trie::build_normalized(&items, &normalizer) {
             Ok(trie) => {
                 let n = u32::try_from(trie.len()).unwrap_or(u32::MAX);
+                s.originals = (0..trie.len())
+                    .map(|id| {
+                        let i = trie.input_index(u32::try_from(id).unwrap_or(u32::MAX)) as usize;
+                        items.get(i).map_or("", |t| t.0).into()
+                    })
+                    .collect();
                 s.trie = Some(trie);
                 n
             }
@@ -205,8 +232,8 @@ fn push_u64(out: &mut String, mut n: u64) {
     }
 }
 
-/// Searches the index for the UTF-8 query at `(ptr, len)` (ASCII letters are
-/// lower-cased) and stores the results text (see the crate documentation).
+/// Searches the index for the UTF-8 query at `(ptr, len)` (normalised like the
+/// terms) and stores the results text (see the crate documentation).
 /// `ranking` is 0 for `Coarse` and 1 for `Exact`. Returns the number of hits,
 /// or `u32::MAX` on error.
 ///
@@ -240,14 +267,13 @@ pub unsafe extern "C" fn kh_search(
         let Some(trie) = s.trie.as_ref() else {
             return ERROR;
         };
-        let query = query.to_ascii_lowercase();
         let cfg = SearchConfig {
             k,
             budget,
             ranking,
             ..SearchConfig::default()
         };
-        let Ok(out) = s.searcher.search(trie, &s.costs, query.as_bytes(), &cfg) else {
+        let Ok(out) = s.searcher.search_text(trie, &s.costs, query, &cfg) else {
             return ERROR;
         };
         let Ok(n) = u32::try_from(out.hits.len()) else {
@@ -259,7 +285,8 @@ pub unsafe extern "C" fn kh_search(
         r.push(if out.stats.truncated { '1' } else { '0' });
         r.push('\n');
         for hit in &out.hits {
-            r.push_str(trie.term(hit.id));
+            let original = s.originals.get(hit.id as usize);
+            r.push_str(original.map_or_else(|| trie.term(hit.id), |t| &**t));
             r.push('\t');
             push_u64(r, u64::from(hit.cost));
             r.push('\t');

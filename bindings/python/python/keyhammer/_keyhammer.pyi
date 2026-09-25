@@ -53,7 +53,13 @@ class SearchResult:
 
 @final
 class Index:
-    def __new__(cls, items: Iterable[Tuple[str, int]]) -> Index: ...
+    def __new__(
+        cls,
+        items: Iterable[Tuple[str, int]],
+        *,
+        fold_case: bool = True,
+        fold_diacritics: bool = True,
+    ) -> Index: ...
     def __len__(self) -> int: ...
     def search(
         self,

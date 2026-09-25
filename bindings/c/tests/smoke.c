@@ -29,7 +29,7 @@ int main(void) {
         ENTRY("hello", 5),
         ENTRY("help", 9),
         ENTRY("world", 1),
-        ENTRY("Hello", 2), /* duplicate of "hello" after lower-casing */
+        ENTRY("Hello", 2), /* duplicate of "hello" after normalising */
     };
     kh_index *idx = NULL;
     CHECK(kh_index_build(entries, 4, &idx) == KH_OK);
@@ -71,6 +71,35 @@ int main(void) {
     CHECK(kh_search(idx, (const uint8_t *)"world", 5, NULL, &res) == KH_OK);
     CHECK(res.len >= 1 && res.hits[0].cost == 0);
     kh_results_free(&res);
+
+    /* Unicode: case and diacritics are folded, hits return the original
+       text and the position of the entry (ABI version 2). */
+    kh_entry uni[] = {
+        ENTRY("S\xc3\xa3o Paulo", 3), /* "Sao Paulo" with a tilde on the a */
+        ENTRY("a\xc3\xa7\xc3\xa3o", 1), /* the same word in lower case */
+        ENTRY("A\xc3\x87\xc3\x83" "O", 9), /* upper case: same term after folding */
+    };
+    kh_index *uidx = NULL;
+    CHECK(kh_index_build(uni, 3, &uidx) == KH_OK);
+    if (uidx != NULL) {
+        CHECK(kh_index_len(uidx, &n) == KH_OK);
+        CHECK(n == 2);
+        CHECK(kh_search(uidx, (const uint8_t *)"SAO PAULO", 9, NULL, &res) ==
+              KH_OK);
+        CHECK(res.len == 1 && res.hits[0].cost == 0 &&
+              res.hits[0].input_index == 0);
+        CHECK(res.len == 1 && res.hits[0].term_len == 10 &&
+              memcmp(res.hits[0].term, "S\xc3\xa3o Paulo", 10) == 0);
+        kh_results_free(&res);
+        CHECK(kh_search(uidx, (const uint8_t *)"acao", 4, NULL, &res) == KH_OK);
+        CHECK(res.len == 1 && res.hits[0].input_index == 2 &&
+              res.hits[0].weight == 9);
+        kh_results_free(&res);
+        /* Invalid UTF-8 is still an error. */
+        CHECK(kh_search(uidx, (const uint8_t *)"\xc3(", 2, NULL, &res) ==
+              KH_ERR_INVALID_UTF8);
+        kh_index_free(&uidx);
+    }
 
     /* Error paths. */
     CHECK(kh_search(idx, (const uint8_t *)"\xff\xfe", 2, NULL, &res) ==

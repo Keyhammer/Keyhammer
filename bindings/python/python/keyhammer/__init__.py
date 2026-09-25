@@ -2,8 +2,9 @@
 # Copyright (C) 2026 Robson Trasel
 """Typo-tolerant top-k search with keyboard-aware edit costs.
 
-Prototype: the API may change. Terms and queries are ASCII only (lowercase
-letters, see the README); there is no add/remove/export yet.
+Prototype: the API may change. Terms and queries are Unicode text, normalised
+identically (case and diacritics folded by default, see the README); there is
+no add/remove/export yet.
 """
 
 from keyhammer._keyhammer import (

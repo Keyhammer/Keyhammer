@@ -24,10 +24,16 @@
 //! # Text handling
 //!
 //! Terms and queries are UTF-8 byte ranges given as `(pointer, length)`,
-//! never NUL-terminated. Invalid UTF-8 is rejected. The engine compares code
-//! points as they are; this layer lower-cases ASCII letters of terms and
-//! queries, like the WebAssembly build, and does not use the core's case and
-//! diacritic folding yet; hits therefore return the lower-cased term.
+//! never NUL-terminated. Invalid UTF-8 is rejected. Terms and queries are
+//! normalised identically before they are compared, with the core's
+//! `keyhammer::text::Normalizer`: by default case and diacritics are folded
+//! (`São Paulo` matches `sao paulo` and `SAO PAULO`, `Straße` matches
+//! `strasse`), and `kh_index_build_ex` can turn either folding off. A hit's
+//! `term` is the dictionary text as the caller gave it (original case and
+//! accents), and `input_index` is its position in the entry array, so a
+//! caller can map a hit back to its own record. Terms that are equal after
+//! normalisation are merged (highest weight, then the first). The query limit
+//! is `KH_MAX_QUERY_LEN` code points, counted after normalisation.
 //!
 //! # Threads
 //!
@@ -60,17 +66,26 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use keyhammer::cost::CostModel;
 use keyhammer::search::{Ranking, SearchConfig, SearchError, Searcher};
+use keyhammer::text::Normalizer;
 use keyhammer::trie::{BuildError, Trie};
 
 /// The ABI version. It changes only when an incompatible change is made; see
 /// `docs/design/c-abi.md`. Compare it with `kh_abi_version` at run time.
-pub const KH_ABI_VERSION: u32 = 1;
+pub const KH_ABI_VERSION: u32 = 2;
 /// `kh_config.ranking`: order by cost rounded up to whole edit units.
 pub const KH_RANKING_COARSE: u32 = 0;
 /// `kh_config.ranking`: order by the exact weighted cost.
 pub const KH_RANKING_EXACT: u32 = 1;
-/// The longest accepted query, in bytes.
+/// The longest accepted query, in code points after normalisation (ABI
+/// version 1 counted bytes; see `docs/design/c-abi.md`).
 pub const KH_MAX_QUERY_LEN: usize = 128;
+/// The longest accepted query, in UTF-8 bytes: 4 bytes for each of
+/// `KH_MAX_QUERY_LEN` code points. Longer input is refused before it is read.
+pub const KH_MAX_QUERY_BYTES: usize = 4 * KH_MAX_QUERY_LEN;
+/// `kh_index_build_ex` flag: do not fold case (`A` and `a` differ).
+pub const KH_NORM_KEEP_CASE: u32 = 1;
+/// `kh_index_build_ex` flag: do not fold diacritics (`é` and `e` differ).
+pub const KH_NORM_KEEP_DIACRITICS: u32 = 2;
 
 /// Result of a call. `KH_OK` is 0; every failure is non-zero. New codes may
 /// be added in later minor versions, so treat unknown non-zero values as
@@ -96,7 +111,8 @@ pub enum kh_status {
     KH_ERR_EMPTY_TERM = 6,
     /// A term is longer than 65535 bytes.
     KH_ERR_TERM_TOO_LONG = 7,
-    /// The query is longer than `KH_MAX_QUERY_LEN` bytes.
+    /// The query is longer than `KH_MAX_QUERY_LEN` code points after
+    /// normalisation, or than `KH_MAX_QUERY_BYTES` bytes.
     KH_ERR_QUERY_TOO_LONG = 8,
     /// An internal error (a caught panic). The message is in `kh_last_error`.
     KH_ERR_INTERNAL = 9,
@@ -145,17 +161,23 @@ pub struct kh_config {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct kh_hit {
-    /// The matched term, `term_len` bytes of UTF-8 (lower-cased).
+    /// The matched term as it was given to `kh_index_build`, `term_len` bytes
+    /// of UTF-8 (original case and accents, not the normalised form).
+    /// For terms merged by normalisation, the entry that was kept.
     pub term: *const u8,
     /// Length of `term` in bytes.
     pub term_len: usize,
     /// Term id inside the index (position in the byte-sorted, deduplicated
-    /// term list).
+    /// list of normalised terms).
     pub id: u32,
     /// Exact weighted edit cost (16 = one ordinary edit), whatever the ranking.
     pub cost: u32,
     /// The term's weight.
     pub weight: u32,
+    /// Position in the `kh_entry` array given to `kh_index_build` of the
+    /// entry this hit is (the one kept among terms equal after
+    /// normalisation).
+    pub input_index: u32,
 }
 
 /// The output of `kh_search`. Free it with `kh_results_free`.
@@ -176,6 +198,8 @@ pub struct kh_results {
 /// `kh_index_free`.
 pub struct kh_index {
     trie: Trie,
+    /// The kept entries' terms as given, by term id.
+    originals: Vec<Box<str>>,
     costs: CostModel,
 }
 
@@ -317,8 +341,9 @@ unsafe fn bytes<'a>(ptr: *const u8, len: usize, what: &str) -> Result<&'a [u8], 
 
 /// Builds an index from `n` entries and stores the handle in `*out`.
 ///
-/// Duplicate terms are merged, keeping the highest weight. ASCII letters are
-/// lower-cased. On success `*out` is a new handle that must be released with
+/// Terms are normalised (case and diacritics folded, as `kh_index_build_ex`
+/// with no flags); terms equal after normalisation are merged, keeping the
+/// highest weight (then the first). Hits return the term as given. On success `*out` is a new handle that must be released with
 /// `kh_index_free`; on failure `*out` is set to null. The entries and their
 /// term bytes are copied and need not outlive the call. Embedded NUL bytes in
 /// a term are accepted and returned unchanged (terms are not C strings).
@@ -326,7 +351,9 @@ unsafe fn bytes<'a>(ptr: *const u8, len: usize, what: &str) -> Result<&'a [u8], 
 /// Fails with `KH_ERR_NULL_POINTER` (`out` or `entries` null, or a term
 /// pointer null with a non-zero length), `KH_ERR_INVALID_LENGTH`,
 /// `KH_ERR_EMPTY_INDEX` (`n == 0`), `KH_ERR_EMPTY_TERM`,
-/// `KH_ERR_TERM_TOO_LONG` or `KH_ERR_INVALID_UTF8`.
+/// `KH_ERR_TERM_TOO_LONG` or `KH_ERR_INVALID_UTF8`. A term that normalises to
+/// nothing (only combining marks) fails with `KH_ERR_EMPTY_TERM`, and one that
+/// normalises to more than 65535 bytes with `KH_ERR_TERM_TOO_LONG`.
 ///
 /// # Safety
 ///
@@ -340,6 +367,28 @@ pub unsafe extern "C" fn kh_index_build(
     n: usize,
     out: *mut *mut kh_index,
 ) -> kh_status {
+    // SAFETY: forwarded from this function's contract.
+    unsafe { kh_index_build_ex(entries, n, 0, out) }
+}
+
+/// `kh_index_build` with normalisation flags: 0 folds case and diacritics (the
+/// default), `KH_NORM_KEEP_CASE` and `KH_NORM_KEEP_DIACRITICS` (ORed) turn a
+/// folding off. Queries are normalised the same way as the terms. Any other
+/// bit fails with `KH_ERR_INVALID_ARGUMENT`; the other failures are those of
+/// `kh_index_build`. With `KH_NORM_KEEP_DIACRITICS` there is no Unicode
+/// composition: `é` (one code point) and `e` followed by U+0301 differ, and
+/// the second costs an extra edit.
+///
+/// # Safety
+///
+/// As `kh_index_build`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kh_index_build_ex(
+    entries: *const kh_entry,
+    n: usize,
+    flags: u32,
+    out: *mut *mut kh_index,
+) -> kh_status {
     guard(|| {
         if out.is_null() {
             return fail(kh_status::KH_ERR_NULL_POINTER, "out is null");
@@ -347,6 +396,15 @@ pub unsafe extern "C" fn kh_index_build(
         // SAFETY: `out` is non-null and valid for writing a pointer by the
         // caller's contract.
         unsafe { out.write(ptr::null_mut()) };
+        if flags & !(KH_NORM_KEEP_CASE | KH_NORM_KEEP_DIACRITICS) != 0 {
+            return fail(
+                kh_status::KH_ERR_INVALID_ARGUMENT,
+                format!("unknown normalisation flags {flags:#x}"),
+            );
+        }
+        let normalizer = Normalizer::new()
+            .with_case_folding(flags & KH_NORM_KEEP_CASE == 0)
+            .with_diacritic_folding(flags & KH_NORM_KEEP_DIACRITICS == 0);
         if n == 0 {
             return fail(kh_status::KH_ERR_EMPTY_INDEX, "no entries were given");
         }
@@ -365,7 +423,7 @@ pub unsafe extern "C" fn kh_index_build(
         // SAFETY: `entries` is non-null and, by the caller's contract, points
         // to `n` initialised entries; `n * size_of` fits in `isize` (checked).
         let entries = unsafe { core::slice::from_raw_parts(entries, n) };
-        let mut terms: Vec<(String, u16)> = Vec::new();
+        let mut terms: Vec<(&str, u16)> = Vec::new();
         if terms.try_reserve_exact(n).is_err() {
             return fail(kh_status::KH_ERR_INTERNAL, "out of memory");
         }
@@ -393,10 +451,15 @@ pub unsafe extern "C" fn kh_index_build(
                     format!("entry {i}: term is longer than 65535 bytes"),
                 );
             }
-            terms.push((s.to_ascii_lowercase(), e.weight));
+            if normalizer.normalize(s).is_empty() {
+                return fail(
+                    kh_status::KH_ERR_EMPTY_TERM,
+                    format!("entry {i}: term normalises to nothing"),
+                );
+            }
+            terms.push((s, e.weight));
         }
-        let items: Vec<(&str, u16)> = terms.iter().map(|(t, w)| (t.as_str(), *w)).collect();
-        let trie = match Trie::build(&items) {
+        let trie = match Trie::build_normalized(&terms, &normalizer) {
             Ok(t) => t,
             Err(BuildError::EmptyTerm) => {
                 return fail(kh_status::KH_ERR_EMPTY_TERM, "empty term");
@@ -412,8 +475,15 @@ pub unsafe extern "C" fn kh_index_build(
             }
             Err(e) => return fail(kh_status::KH_ERR_INVALID_ARGUMENT, e.to_string()),
         };
+        let originals: Vec<Box<str>> = (0..trie.len())
+            .map(|id| {
+                let i = trie.input_index(u32::try_from(id).unwrap_or(u32::MAX)) as usize;
+                terms.get(i).map_or("", |t| t.0).into()
+            })
+            .collect();
         let index = Box::new(kh_index {
             trie,
+            originals,
             costs: CostModel::qwerty(),
         });
         // SAFETY: `out` is valid for writing (see above).
@@ -528,8 +598,8 @@ unsafe fn read_config(cfg: *const kh_config) -> Result<SearchConfig, kh_status> 
 /// `cfg` may be null for the defaults. `*out` is fully overwritten (it is not
 /// read, so an uninitialised struct is fine, but a previous result in it is
 /// leaked unless freed first); on failure it is set to an empty result. On
-/// success release it with `kh_results_free`. ASCII letters of the query are
-/// lower-cased. An empty query is allowed. Embedded NUL bytes are ordinary
+/// success release it with `kh_results_free`. The query is normalised like
+/// the terms (`ACAO` finds `ação`). An empty query is allowed. Embedded NUL bytes are ordinary
 /// bytes. The pointer returned by `kh_last_error` is invalidated by the next
 /// call into the library, including `kh_index_free` and `kh_results_free`.
 /// Copying a `kh_results` and freeing both copies is a double free, like
@@ -537,9 +607,10 @@ unsafe fn read_config(cfg: *const kh_config) -> Result<SearchConfig, kh_status> 
 ///
 /// Fails with `KH_ERR_NULL_POINTER` (`index` or `out` null, or `query` null
 /// with a non-zero length), `KH_ERR_INVALID_UTF8`,
-/// `KH_ERR_QUERY_TOO_LONG` (`query_len` above `KH_MAX_QUERY_LEN`, checked
+/// `KH_ERR_QUERY_TOO_LONG` (`query_len` above `KH_MAX_QUERY_BYTES`, checked
 /// before the buffer is read, so a huge length is reported this way and
-/// `KH_ERR_INVALID_LENGTH` is never returned by this function) or
+/// `KH_ERR_INVALID_LENGTH` is never returned by this function; or more than
+/// `KH_MAX_QUERY_LEN` code points after normalisation) or
 /// `KH_ERR_INVALID_ARGUMENT` (bad `cfg`, including `reserved != 0`).
 ///
 /// # Safety
@@ -570,10 +641,10 @@ pub unsafe extern "C" fn kh_search(
             Ok(c) => c,
             Err(s) => return s,
         };
-        if query_len > KH_MAX_QUERY_LEN {
+        if query_len > KH_MAX_QUERY_BYTES {
             return fail(
                 kh_status::KH_ERR_QUERY_TOO_LONG,
-                format!("query has {query_len} bytes, the limit is {KH_MAX_QUERY_LEN}"),
+                format!("query has {query_len} bytes, the limit is {KH_MAX_QUERY_BYTES}"),
             );
         }
         // SAFETY: forwarded from this function's contract.
@@ -584,17 +655,16 @@ pub unsafe extern "C" fn kh_search(
         let Ok(q) = core::str::from_utf8(q) else {
             return fail(kh_status::KH_ERR_INVALID_UTF8, "query is not valid UTF-8");
         };
-        let q = q.to_ascii_lowercase();
         // SAFETY: `index` is a live handle (caller's contract); only shared
         // access is used, so concurrent searches are fine.
         let index = unsafe { &*index };
         let mut searcher = Searcher::new();
-        let output = match searcher.search(&index.trie, &index.costs, q.as_bytes(), &cfg) {
+        let output = match searcher.search_text(&index.trie, &index.costs, q, &cfg) {
             Ok(o) => o,
             Err(SearchError::QueryTooLong { len, max }) => {
                 return fail(
                     kh_status::KH_ERR_QUERY_TOO_LONG,
-                    format!("query has {len} bytes, the limit is {max}"),
+                    format!("query has {len} code points after normalisation, the limit is {max}"),
                 );
             }
             Err(e) => return fail(kh_status::KH_ERR_INVALID_ARGUMENT, e.to_string()),
@@ -603,13 +673,18 @@ pub unsafe extern "C" fn kh_search(
             .hits
             .iter()
             .map(|h| {
-                let t = index.trie.term(h.id);
+                let i = index.trie.input_index(h.id);
+                let t = index
+                    .originals
+                    .get(h.id as usize)
+                    .map_or_else(|| index.trie.term(h.id), |t| &**t);
                 kh_hit {
                     term: t.as_ptr(),
                     term_len: t.len(),
                     id: h.id,
                     cost: u32::from(h.cost),
                     weight: u32::from(h.weight),
+                    input_index: i,
                 }
             })
             .collect();

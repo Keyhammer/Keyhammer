@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { COST_PER_EDIT, Index, KeyhammerError, MAX_BUDGET, MAX_QUERY_BYTES } from '../index.js';
+import { COST_PER_EDIT, Index, KeyhammerError, MAX_BUDGET, MAX_QUERY_LENGTH } from '../index.js';
 
 const dict = [
   ['javascript', 10],
@@ -14,7 +14,7 @@ const dict = [
   ['python', 10],
   ['rust', 10],
   ['java', 10],
-  { term: 'Swift', weight: 7 }, // upper case is folded
+  { term: 'Swift', weight: 7 }, // case is folded for matching; the hit returns 'Swift'
   ['form', 5],
   ['from', 9],
   ['dog', 3],
@@ -57,7 +57,7 @@ test('transposition and neighbouring-key costs', () => {
 
 test('query case folding, weights', () => {
   const index = Index.build(dict);
-  assert.deepEqual(index.search('SWIFT').hits[0], { term: 'swift', cost: 0, weight: 7 });
+  assert.deepEqual(index.search('SWIFT').hits[0], { term: 'Swift', cost: 0, weight: 7 });
   assert.equal(index.search('java').hits[0].weight, 20);
   assert.equal(index.search('go').hits[0].weight, 0);
 });
@@ -84,9 +84,8 @@ test('search argument errors', () => {
   assert.throws(() => index.search('java', { k: -1 }), RangeError);
   assert.throws(() => index.search('java', { k: 1.5 }), RangeError);
   assert.throws(() => index.search('java', { budget: '32' }), RangeError);
-  assert.throws(() => index.search('a'.repeat(MAX_QUERY_BYTES + 1)), RangeError);
-  assert.throws(() => index.search('é'.repeat(MAX_QUERY_BYTES / 2 + 1)), RangeError, 'limit counts UTF-8 bytes');
-  assert.doesNotThrow(() => index.search('a'.repeat(MAX_QUERY_BYTES)));
+  assert.throws(() => index.search('a'.repeat(MAX_QUERY_LENGTH + 1)), RangeError);
+  assert.doesNotThrow(() => index.search('a'.repeat(MAX_QUERY_LENGTH)));
   assert.doesNotThrow(() => index.search(''));
 });
 
@@ -156,4 +155,96 @@ test('lone surrogates are rejected, pairs are kept', () => {
   }
   assert.equal(Index.build(['a\u{1F600}']).size, 1);
   assert.doesNotThrow(() => Index.build(['ok']).search('a\u{1F600}'));
+});
+
+// ---- Unicode normalisation (issue #67) ----
+
+const testdata = (name) =>
+  readFileSync(new URL(`../../testdata/${name}`, import.meta.url), 'utf8').split(/\r?\n/).filter((l) => l.length > 0);
+
+const PT = [
+  ['São Paulo', 9],
+  ['coração', 5],
+  ['Ação', 1],
+  ['ação', 8],
+  ['não', 3],
+  ['pé', 2],
+  ['ônibus', 4],
+  ['Ç', 6],
+  ['Straße', 7],
+  ['Müller', 3],
+  ['Crème Brûlée', 5],
+];
+
+test('queries in another case or with other diacritics find the dictionary text', () => {
+  const index = Index.build(PT);
+  for (const [query, term] of [
+    ['sao paulo', 'São Paulo'],
+    ['SAO PAULO', 'São Paulo'],
+    ['São Paulo', 'São Paulo'],
+    ['SÃO PAULO', 'São Paulo'],
+    ['ACAO', 'ação'],
+    ['AÇÃO', 'ação'],
+    ['coracao', 'coração'],
+    ['NAO', 'não'],
+    ['PE', 'pé'],
+    ['onibus', 'ônibus'],
+    ['c', 'Ç'],
+    ['strasse', 'Straße'],
+    ['STRASSE', 'Straße'],
+    ['muller', 'Müller'],
+    ['creme brulee', 'Crème Brûlée'],
+  ]) {
+    const h = index.search(query, { ranking: 'exact' }).hits[0];
+    assert.deepEqual([h.term, h.cost], [term, 0], query);
+  }
+  assert.equal(index.search('sao paolo', { ranking: 'exact' }).hits[0].cost, COST_PER_EDIT);
+});
+
+test('hits return the original text; terms equal after folding merge', () => {
+  const index = Index.build(PT);
+  assert.equal(index.size, PT.length - 1); // Ação and ação
+  assert.deepEqual(index.search('acao').hits[0], { term: 'ação', cost: 0, weight: 8 });
+  assert.equal(index.search('straße').hits[0].term, 'Straße');
+  assert.equal(Index.build(['Café']).search('cafe').hits[0].cost, 0); // decomposed accent
+});
+
+test('a term that folds to nothing is an error naming the entry', () => {
+  assert.throws(() => Index.build(['ok', '\u0301\u0302']), { name: 'RangeError', message: /terms\[1\].*folds to nothing/ });
+  assert.throws(() => Index.build(['\u0301']), RangeError);
+});
+
+test('the query limit counts code points', () => {
+  const index = Index.build(['é']);
+  assert.doesNotThrow(() => index.search('é'.repeat(MAX_QUERY_LENGTH)));
+  assert.doesNotThrow(() => index.search('\u{1F600}'.repeat(MAX_QUERY_LENGTH)));
+  assert.throws(() => index.search('é'.repeat(MAX_QUERY_LENGTH + 1)), RangeError);
+  assert.throws(() => index.search('ß'.repeat(65)), RangeError, 'folds to 130 letters');
+  // Over the limit as given (200 code points), within it after folding (100).
+  assert.doesNotThrow(() => index.search('e\u0301'.repeat(100)));
+  assert.throws(() => index.search('a'.repeat(100000)), RangeError);
+});
+
+test('results equal the Rust core on the shared dictionary', () => {
+  // bindings/testdata/unicode_expected.tsv is produced by the core alone
+  // (Trie::build_normalized + Searcher::search_text), see bindings/c tests.
+  const items = testdata('unicode_dict.tsv').map((l) => {
+    const [term, weight] = l.split('\t');
+    return [term, Number(weight)];
+  });
+  const index = Index.build(items);
+  const cases = testdata('unicode_cases.tsv').map((l) => l.split('\t'));
+  const golden = readFileSync(new URL('../../testdata/unicode_expected.tsv', import.meta.url), 'utf8')
+    .split(/\r?\n/)
+    .filter((l) => l.length > 0);
+  assert.equal(cases.length, golden.length);
+  assert.ok(cases.length > 50);
+  const byTerm = new Map(items.map(([t], i) => [t, i]));
+  cases.forEach(([query, budget, ranking], i) => {
+    const got = index
+      .search(query, { budget: Number(budget), ranking })
+      .hits.map((h) => `${byTerm.get(h.term)}:${h.cost}:${h.weight}`)
+      .join(',');
+    assert.equal(got, golden[i].split('\t')[1], `case ${i}: ${query}`);
+  });
 });

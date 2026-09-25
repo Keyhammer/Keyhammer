@@ -39,13 +39,20 @@ index.search("pyhton", config=cfg)
 kh.SearchConfig.high_recall()                   # the core's opt-in preset (budget 48)
 ```
 
-- `Index(items)`: `items` is any iterable of `(term: str, weight: int)`, weight
-  in `0..=65535`. Terms are lower-cased first, so `Rust` and `rust` are the
-  same term; duplicates keep the highest weight.
-- `Hit` has `term` (lower-cased), `cost`, `weight` and `index`: the position in
-  `items` of the entry that was kept (highest weight, first among ties). Since
-  terms are lower-cased and deduplicated, `index` is how to map a hit back to
-  your own record.
+- `Index(items, *, fold_case=True, fold_diacritics=True)`: `items` is any
+  iterable of `(term: str, weight: int)`, weight in `0..=65535`. Terms and
+  queries are normalised identically with the core's `Normalizer` before they
+  are compared: by default case and diacritics are folded, so `São Paulo` is
+  found by `sao paulo` and `ACAO` finds `ação` (`ß` folds to `ss`, `Œ` to
+  `oe`; see `docs/design/unicode.md` for the exact policy). The two keyword
+  options turn a folding off. Terms that are equal after normalisation (`Ação`
+  and `ação`) are one term; duplicates keep the highest weight.
+- `Hit` has `term`, `cost`, `weight` and `index`. `term` is the text you gave
+  (original case and accents), not the normalised form; `index` is the
+  position in `items` of the entry that was kept (highest weight, first among
+  ties), which is how to map a hit back to your own record.
+  Comparing `hit.term` with your own strings therefore works without any
+  folding on your side.
 - `Index`, `SearchConfig` and `Ranking` cannot be pickled or copied.
 - `Index.search(query, k=None, budget=None, ranking=None, *, config=None)`:
   keyword values override `config`; without either, the core defaults are used
@@ -53,23 +60,32 @@ kh.SearchConfig.high_recall()                   # the core's opt-in preset (budg
   ordinary edit. `budget` is at most 64.
 - `Ranking.COARSE` and `Ranking.EXACT` are the core's two orderings.
 - Errors are exceptions, all subclasses of `keyhammer.KeyhammerError`, itself a
-  `ValueError`. `BuildError`: empty input, empty or over-long term, weight out
-  of range, non-ASCII term, or a term that is not valid Unicode (such as a lone
-  surrogate). `SearchError` for a rejected search, with the subclasses
-  `QueryTooLongError` (query over 128 bytes) and `BudgetTooLargeError` (budget
-  above 64, or above 65535); a non-ASCII query or a negative `k` or `budget`
-  raises plain `SearchError`. `SearchConfig(...)` raises `KeyhammerError` for
+  `ValueError`. `BuildError`: empty input, a term that is empty (or folds to
+  nothing, such as a lone combining accent, reported as `entry i: term
+  normalises to nothing`) or over-long, weight out of range,
+  or a term that is not valid Unicode (a lone surrogate, which cannot be
+  encoded as UTF-8). `SearchError` for a rejected search, with the subclasses
+  `QueryTooLongError` (query over 128 code points after normalisation; `ß`
+  counts as two) and `BudgetTooLargeError` (budget above 64, or above 65535); a
+  query with a lone surrogate or a negative `k` or `budget` raises plain
+  `SearchError`. `SearchConfig(...)` raises `KeyhammerError` for
   out-of-range values. A malformed item raises `TypeError`.
 - Type stubs (`_keyhammer.pyi`) and `py.typed` ship with the package.
 
 ## Limits
 
-- **ASCII only, lowercase letters in practice.** The core now compares code
-  points and can fold case and diacritics (issue #19), but this binding does
-  not use that yet: it lower-cases ASCII letters and refuses non-ASCII terms
-  and queries with an error. Lifting the restriction is a follow-up. Other ASCII characters
-  (digits, punctuation) are accepted but compared verbatim, with no keyboard
-  neighbourhood; results on them are not tuned or measured.
+- **Folding covers what the core's tables cover**: Latin-1 and Latin Extended-A
+  (plus ligatures and a few more), no Greek or Cyrillic case folding, no NFC
+  composition beyond dropping combining marks, no Turkish `i`. Other scripts
+  are compared per code point as they are. Digits and punctuation are
+  compared verbatim, with no keyboard neighbourhood except the few non-`a-z`
+  keys of the core's layouts (not exposed here); results on them are not tuned
+  or measured. The costs of non-ASCII substitutions are the default ones (a
+  substitution of `é` by `e` costs nothing after folding, but `é` by `è` with
+  diacritic folding off is an ordinary edit). With `fold_diacritics=False`
+  there is no Unicode composition: `é` (one code point) and `e` followed by
+  U+0301 differ, and the second costs an extra edit (32 for a whole-term
+  query at the default costs).
 - **Build once, no changes.** The issue asks for add, remove and export. The
   core has no overlay for insertions and deletions (#31) and no serialisation
   (#26), so the binding has none of them either: to change the dictionary,

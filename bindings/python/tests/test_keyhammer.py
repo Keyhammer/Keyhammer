@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Robson Trasel
+import pathlib
 import threading
 
 import pytest
@@ -84,7 +85,6 @@ def test_k_zero_and_no_match():
         ([("ok", 65536)], kh.BuildError),
         ([("ok", 2**70)], kh.BuildError),
         ([("ab\ud800", 1)], kh.BuildError),
-        ([("café", 1)], kh.BuildError),
         ([("ok", "x")], TypeError),
         ([("ok",)], TypeError),
         (5, TypeError),
@@ -103,8 +103,6 @@ def test_search_errors():
         idx.search("java", budget=65)
     with pytest.raises(kh.BudgetTooLargeError):
         idx.search("java", budget=70000)
-    with pytest.raises(kh.SearchError):
-        idx.search("café")
     with pytest.raises(kh.SearchError):
         idx.search("ab\ud800")
     with pytest.raises(kh.SearchError):
@@ -174,3 +172,145 @@ def test_concurrent_searches_agree():
     assert len(results) == 1600
     assert all(r == expected for r in results)
 
+
+# ---- Unicode normalisation (issue #67) ----
+
+TESTDATA = pathlib.Path(__file__).resolve().parents[2] / "testdata"
+
+
+def _dict():
+    rows = [l.split("\t") for l in (TESTDATA / "unicode_dict.tsv").read_text(encoding="utf-8").splitlines()]
+    return [(t, int(w)) for t, w in rows]
+
+
+def _cases():
+    rows = [l.split("\t") for l in (TESTDATA / "unicode_cases.tsv").read_text(encoding="utf-8").splitlines()]
+    return [(q, int(b), r) for q, b, r in rows]
+
+
+def _golden():
+    out = []
+    for line in (TESTDATA / "unicode_expected.tsv").read_text(encoding="utf-8").splitlines():
+        _, hits = line.split("\t")
+        out.append([tuple(int(x) for x in h.split(":")) for h in hits.split(",")] if hits else [])
+    return out
+
+
+def test_matches_the_rust_core_on_the_shared_unicode_dictionary():
+    # bindings/testdata/unicode_expected.tsv is produced by the Rust core alone
+    # (Trie::build_normalized + Searcher::search_text; the test that keeps it
+    # fresh is in bindings/c). Same dictionary, same queries, same hits.
+    items = _dict()
+    idx = kh.Index(items)
+    cases, golden = _cases(), _golden()
+    assert len(cases) == len(golden) > 50
+    for i, ((q, budget, ranking), want) in enumerate(zip(cases, golden)):
+        ranking = kh.Ranking.EXACT if ranking == "exact" else kh.Ranking.COARSE
+        got = idx.search(q, budget=budget, ranking=ranking).hits
+        assert [(h.index, h.cost, h.weight) for h in got] == want, (i, q)
+        # hits return the caller's original text
+        assert [h.term for h in got] == [items[h.index][0] for h in got], (i, q)
+
+
+PORTUGUESE = [
+    ("São Paulo", 9),
+    ("coração", 5),
+    ("Ação", 1),
+    ("ação", 8),
+    ("não", 3),
+    ("pé", 2),
+    ("ônibus", 4),
+    ("Ç", 6),
+    ("Straße", 7),
+    ("Müller", 3),
+    ("Crème Brûlée", 5),
+]
+
+
+@pytest.mark.parametrize(
+    "query, term",
+    [
+        ("sao paulo", "São Paulo"),
+        ("SAO PAULO", "São Paulo"),
+        ("São Paulo", "São Paulo"),
+        ("SÃO PAULO", "São Paulo"),
+        ("ACAO", "ação"),
+        ("AÇÃO", "ação"),
+        ("coracao", "coração"),
+        ("NAO", "não"),
+        ("PE", "pé"),
+        ("onibus", "ônibus"),
+        ("c", "Ç"),
+        ("strasse", "Straße"),
+        ("STRASSE", "Straße"),
+        ("muller", "Müller"),
+        ("creme brulee", "Crème Brûlée"),
+    ],
+)
+def test_query_case_and_diacritics_are_folded(query, term):
+    idx = kh.Index(PORTUGUESE)
+    hits = idx.search(query, ranking=kh.Ranking.EXACT).hits
+    assert (hits[0].term, hits[0].cost) == (term, 0)
+
+
+def test_hits_return_the_original_text_and_merge_equal_terms():
+    idx = kh.Index(PORTUGUESE)
+    assert len(idx) == len(PORTUGUESE) - 1  # "Ação" and "ação" merge
+    hit = idx.search("acao").hits[0]
+    assert (hit.term, hit.weight, hit.index) == ("ação", 8, 3)  # higher weight kept
+    # the normalised form is never what comes back
+    assert idx.search("straße").hits[0].term == "Straße"
+
+
+def test_folding_can_be_turned_off():
+    items = [("Café", 1), ("cafe", 1), ("CAFE", 1)]
+    assert len(kh.Index(items)) == 1
+    assert len(kh.Index(items, fold_case=False)) == 3
+    assert len(kh.Index(items, fold_diacritics=False)) == 2
+    keep = kh.Index(items, fold_diacritics=False)
+    hit = keep.search("CAFÉ", ranking=kh.Ranking.EXACT).hits[0]
+    assert (hit.term, hit.cost) == ("Café", 0)
+    exact = kh.Index(items, fold_case=False)
+    assert exact.search("CAFE", ranking=kh.Ranking.EXACT).hits[0].term == "CAFE"
+    with pytest.raises(TypeError):
+        kh.Index(items, False)  # the options are keyword-only
+
+
+def test_a_typo_costs_one_edit_over_the_folded_text():
+    idx = kh.Index(PORTUGUESE)
+    hit = idx.search("SAO PAOLO", ranking=kh.Ranking.EXACT).hits[0]
+    assert (hit.term, hit.cost) == ("São Paulo", 16)
+
+
+def test_query_limit_counts_code_points_after_normalisation():
+    idx = kh.Index([("é", 1)])
+    idx.search("é" * 128)  # 256 bytes, 128 code points: accepted
+    with pytest.raises(kh.QueryTooLongError):
+        idx.search("é" * 129)
+    with pytest.raises(kh.QueryTooLongError):
+        idx.search("ß" * 65)  # folds to 130 letters
+    # over the limit as given (200 code points), within it once folded (100)
+    idx.search("e\u0301" * 100)
+
+
+def test_lone_surrogates_are_rejected_with_a_clear_message():
+    with pytest.raises(kh.BuildError, match="lone surrogate"):
+        kh.Index([("ab\ud800", 1)])
+    idx = kh.Index([("ab", 1)])
+    with pytest.raises(kh.SearchError, match="lone surrogate"):
+        idx.search("ab\udfff")
+
+
+def test_a_term_that_folds_to_nothing_is_a_build_error():
+    with pytest.raises(kh.BuildError, match="entry 1: term normalises to nothing"):
+        kh.Index([("ok", 1), ("\u0301\u0302", 1)])
+    # with the diacritic folding off nothing folds to nothing
+    assert len(kh.Index([("\u0301", 1)], fold_diacritics=False)) == 1
+    # decomposed input equals precomposed input
+    assert kh.Index([("Cafe\u0301", 1)]).search("cafe").hits[0].cost == 0
+
+
+def test_non_latin_text_is_compared_per_code_point_without_folding_scripts():
+    idx = kh.Index([("Привет", 1), ("東京", 1)])
+    assert idx.search("Привет").hits[0].cost == 0
+    assert idx.search("東京").hits[0].term == "東京"

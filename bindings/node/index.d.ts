@@ -3,8 +3,8 @@
 
 /** Cost of one ordinary edit in the engine's fixed-point costs. */
 export const COST_PER_EDIT: 16;
-/** Largest accepted query, in UTF-8 bytes. */
-export const MAX_QUERY_BYTES: 128;
+/** Largest accepted query, in code points counted after case and diacritic folding (by the engine; `ß` counts as two, a decomposed accent as one letter). Input over 4 x this many UTF-8 bytes is refused at once. */
+export const MAX_QUERY_LENGTH: 128;
 /** Largest accepted budget. */
 export const MAX_BUDGET: 64;
 
@@ -21,7 +21,7 @@ export interface SearchOptions {
 }
 
 export interface Hit {
-  /** The dictionary term, lower-cased. */
+  /** The dictionary term as it was given to `Index.build` (original case and accents), not the folded form. */
   term: string;
   /** Fixed-point cost: `COST_PER_EDIT` (16) is one ordinary edit. */
   cost: number;
@@ -54,7 +54,7 @@ export class Index {
   readonly size: number;
   /**
    * Searches for `query`. Throws `TypeError` or `RangeError` for invalid
-   * arguments (query over 128 UTF-8 bytes, budget over 64, unknown ranking)
+   * arguments (query over 128 code points, budget over 64, unknown ranking)
    * and `KeyhammerError` if the engine rejects the search.
    */
   search(query: string, options?: SearchOptions): SearchResult;

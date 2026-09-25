@@ -236,7 +236,7 @@ function Results({ result }) {
   if (result.error) {
     return (
       <p className="alert alert--danger" role="status">
-        The search was rejected (the query may be longer than 128 bytes).
+        The search was rejected (the query may be longer than 128 code points).
       </p>
     );
   }
@@ -290,9 +290,9 @@ export default function DemoPage() {
         <div className="alert alert--warning" role="note">
           <strong>Unpublished prototype.</strong> This page runs the Keyhammer core compiled to
           WebAssembly, entirely in your browser, and loads nothing from third parties. The engine
-          currently expects lowercase ASCII <code>a-z</code> (ASCII letters are lower-cased; other
-          bytes are compared verbatim), and the results depend on provisional edit costs that
-          have not been calibrated. See the <Link to="/docs/results">results</Link> page for what
+          folds case and accents (Latin-1 and Latin Extended-A: <code>SAO PAULO</code> finds{' '}
+          <code>São Paulo</code>; other scripts are compared as they are), and the results
+          depend on provisional edit costs that have not been calibrated. See the <Link to="/docs/results">results</Link> page for what
           has been measured and its caveats.
         </div>
         <BrowserOnly fallback={<p>Loading the demo...</p>}>{() => <Demo />}</BrowserOnly>

@@ -9,8 +9,12 @@ import { readFileSync } from 'node:fs';
 /** Cost of one ordinary edit in the engine's fixed-point costs. */
 export const COST_PER_EDIT = 16;
 
-/** Largest accepted query, in UTF-8 bytes. */
-export const MAX_QUERY_BYTES = 128;
+/**
+ * Largest accepted query, in code points. The engine counts the query after
+ * normalisation (`ß` becomes `ss`, two code points), so a query at this limit
+ * can still be refused with a `RangeError` from the engine's answer.
+ */
+export const MAX_QUERY_LENGTH = 128;
 
 /** Largest accepted budget (a limit of the core, `SearchError::BudgetTooLarge`). */
 export const MAX_BUDGET = 64;
@@ -86,6 +90,11 @@ function line(entry, i) {
   if (!wellFormed(term)) {
     throw new TypeError(`terms[${i}]: a term must be well-formed UTF-16 (no lone surrogates)`);
   }
+  // Combining marks U+0300 to U+036F are dropped by the default folding, so a
+  // term made only of them would be empty.
+  if (/^[\u0300-\u036F]+$/.test(term)) {
+    throw new RangeError(`terms[${i}]: the term folds to nothing (only combining marks)`);
+  }
   if (encoder.encode(term).length > MAX_TERM_BYTES) {
     throw new RangeError(`terms[${i}]: a term is limited to ${MAX_TERM_BYTES} UTF-8 bytes`);
   }
@@ -113,7 +122,10 @@ export class Index {
   /**
    * Builds an index. `terms` is an iterable of strings, `[term, weight]` pairs
    * or `{ term, weight }` objects (weight: integer 0 to 65535, default 0).
-   * ASCII letters are lower-cased. Duplicates keep the highest weight.
+   * Case and diacritics are folded (`São Paulo` is stored as `sao paulo`,
+   * `Straße` as `strasse`); terms equal after folding are merged, keeping the
+   * highest weight (then the first). Hits return the term as given here.
+   * A term that folds to nothing (only combining marks) is a `RangeError`.
    */
   static build(terms) {
     if (terms === null || typeof terms !== 'object' || typeof terms[Symbol.iterator] !== 'function') {
@@ -136,7 +148,7 @@ export class Index {
   }
 
   /**
-   * Searches for `query` (ASCII letters are lower-cased). Options: `k`, the
+   * Searches for `query`, folded like the terms (`ACAO` finds `ação`). Options: `k`, the
    * number of hits (default 10); `budget`, an integer from 0 to 64 (default
    * 32, about two edits; 48 is the high-recall setting); `ranking`, `'coarse'`
    * (default) or `'exact'`. Returns the hits, best first, with the number of
@@ -151,13 +163,22 @@ export class Index {
     if (!isU(budget, MAX_BUDGET)) throw new RangeError(`budget must be an integer from 0 to ${MAX_BUDGET}`);
     if (!Object.hasOwn(RANKINGS, ranking)) throw new TypeError("ranking must be 'coarse' or 'exact'");
     if (!wellFormed(query)) throw new TypeError('query must be well-formed UTF-16 (no lone surrogates)');
+    // Only a byte pre-check here (128 code points are at most 512 UTF-8
+    // bytes), so that a huge string is not copied into WebAssembly memory. The
+    // limit itself is counted by the engine after folding: a decomposed
+    // accent (e + U+0301) is two code points as given and one after folding.
     const data = encoder.encode(query);
-    if (data.length > MAX_QUERY_BYTES) {
-      throw new RangeError(`query is limited to ${MAX_QUERY_BYTES} UTF-8 bytes`);
+    if (data.length > MAX_QUERY_LENGTH * 4) {
+      throw new RangeError(`query is limited to ${MAX_QUERY_LENGTH} code points (at most ${MAX_QUERY_LENGTH * 4} UTF-8 bytes)`);
     }
     const kh = this.#kh;
     const n = withBuffer(kh, data, (ptr, len) => kh.kh_search(ptr, len, k, budget, RANKINGS[ranking])) >>> 0;
-    if (n === ERROR) throw new KeyhammerError('the engine rejected the search');
+    if (n === ERROR) {
+      // Every other reason for a refusal was checked above (types, budget,
+      // ranking, well-formed text), so what is left is a query that is longer
+      // than the limit once folded (`ß` becomes `ss`).
+      throw new RangeError(`query is limited to ${MAX_QUERY_LENGTH} code points after folding (ß counts as two)`);
+    }
     const text = decoder.decode(new Uint8Array(kh.memory.buffer, kh.kh_results_ptr(), kh.kh_results_len()));
     const [header, ...rows] = text.split('\n');
     const [nodes, truncated] = header.split('\t');

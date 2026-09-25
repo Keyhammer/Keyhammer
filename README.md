@@ -155,7 +155,7 @@ legacy one), so its numbers are not comparable with earlier runs of that script.
 ## Roadmap
 
 - Improve ranking quality against the baseline.
-- Unicode folding beyond Latin-1 and Latin Extended-A, and in the bindings.
+- Unicode folding beyond Latin-1 and Latin Extended-A (the bindings already use the core's folding).
 - Index serialization.
 - More language bindings for the new engine (Node.js exists: `bindings/node`).
 

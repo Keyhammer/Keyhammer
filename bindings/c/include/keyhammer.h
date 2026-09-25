@@ -15,7 +15,7 @@
  The ABI version. It changes only when an incompatible change is made; see
  `docs/design/c-abi.md`. Compare it with `kh_abi_version` at run time.
  */
-#define KH_ABI_VERSION 1
+#define KH_ABI_VERSION 2
 
 /*
  `kh_config.ranking`: order by cost rounded up to whole edit units.
@@ -28,9 +28,26 @@
 #define KH_RANKING_EXACT 1
 
 /*
- The longest accepted query, in bytes.
+ The longest accepted query, in code points after normalisation (ABI
+ version 1 counted bytes; see `docs/design/c-abi.md`).
  */
 #define KH_MAX_QUERY_LEN 128
+
+/*
+ The longest accepted query, in UTF-8 bytes: 4 bytes for each of
+ `KH_MAX_QUERY_LEN` code points. Longer input is refused before it is read.
+ */
+#define KH_MAX_QUERY_BYTES (4 * KH_MAX_QUERY_LEN)
+
+/*
+ `kh_index_build_ex` flag: do not fold case (`A` and `a` differ).
+ */
+#define KH_NORM_KEEP_CASE 1
+
+/*
+ `kh_index_build_ex` flag: do not fold diacritics (`é` and `e` differ).
+ */
+#define KH_NORM_KEEP_DIACRITICS 2
 
 /*
  Result of a call. `KH_OK` is 0; every failure is non-zero. New codes may
@@ -73,7 +90,8 @@ typedef enum kh_status {
    */
   KH_ERR_TERM_TOO_LONG = 7,
   /*
-   The query is longer than `KH_MAX_QUERY_LEN` bytes.
+   The query is longer than `KH_MAX_QUERY_LEN` code points after
+   normalisation, or than `KH_MAX_QUERY_BYTES` bytes.
    */
   KH_ERR_QUERY_TOO_LONG = 8,
   /*
@@ -152,7 +170,9 @@ typedef struct kh_entry {
  */
 typedef struct kh_hit {
   /*
-   The matched term, `term_len` bytes of UTF-8 (lower-cased).
+   The matched term as it was given to `kh_index_build`, `term_len` bytes
+   of UTF-8 (original case and accents, not the normalised form).
+   For terms merged by normalisation, the entry that was kept.
    */
   const uint8_t *term;
   /*
@@ -161,7 +181,7 @@ typedef struct kh_hit {
   size_t term_len;
   /*
    Term id inside the index (position in the byte-sorted, deduplicated
-   term list).
+   list of normalised terms).
    */
   uint32_t id;
   /*
@@ -172,6 +192,12 @@ typedef struct kh_hit {
    The term's weight.
    */
   uint32_t weight;
+  /*
+   Position in the `kh_entry` array given to `kh_index_build` of the
+   entry this hit is (the one kept among terms equal after
+   normalisation).
+   */
+  uint32_t input_index;
 } kh_hit;
 
 /*
@@ -235,8 +261,9 @@ enum kh_status kh_config_default(struct kh_config *cfg);
 /*
  Builds an index from `n` entries and stores the handle in `*out`.
 
- Duplicate terms are merged, keeping the highest weight. ASCII letters are
- lower-cased. On success `*out` is a new handle that must be released with
+ Terms are normalised (case and diacritics folded, as `kh_index_build_ex`
+ with no flags); terms equal after normalisation are merged, keeping the
+ highest weight (then the first). Hits return the term as given. On success `*out` is a new handle that must be released with
  `kh_index_free`; on failure `*out` is set to null. The entries and their
  term bytes are copied and need not outlive the call. Embedded NUL bytes in
  a term are accepted and returned unchanged (terms are not C strings).
@@ -244,7 +271,9 @@ enum kh_status kh_config_default(struct kh_config *cfg);
  Fails with `KH_ERR_NULL_POINTER` (`out` or `entries` null, or a term
  pointer null with a non-zero length), `KH_ERR_INVALID_LENGTH`,
  `KH_ERR_EMPTY_INDEX` (`n == 0`), `KH_ERR_EMPTY_TERM`,
- `KH_ERR_TERM_TOO_LONG` or `KH_ERR_INVALID_UTF8`.
+ `KH_ERR_TERM_TOO_LONG` or `KH_ERR_INVALID_UTF8`. A term that normalises to
+ nothing (only combining marks) fails with `KH_ERR_EMPTY_TERM`, and one that
+ normalises to more than 65535 bytes with `KH_ERR_TERM_TOO_LONG`.
 
  # Safety
 
@@ -253,7 +282,27 @@ enum kh_status kh_config_default(struct kh_config *cfg);
  whose `term` is null (only with `len == 0`) or points to `len` initialised
  bytes.
  */
-enum kh_status kh_index_build(const struct kh_entry *entries, size_t n, struct kh_index **out);
+enum kh_status kh_index_build(const struct kh_entry *entries,
+                              size_t n,
+                              struct kh_index **out);
+
+/*
+ `kh_index_build` with normalisation flags: 0 folds case and diacritics (the
+ default), `KH_NORM_KEEP_CASE` and `KH_NORM_KEEP_DIACRITICS` (ORed) turn a
+ folding off. Queries are normalised the same way as the terms. Any other
+ bit fails with `KH_ERR_INVALID_ARGUMENT`; the other failures are those of
+ `kh_index_build`. With `KH_NORM_KEEP_DIACRITICS` there is no Unicode
+ composition: `é` (one code point) and `e` followed by U+0301 differ, and
+ the second costs an extra edit.
+
+ # Safety
+
+ As `kh_index_build`.
+ */
+enum kh_status kh_index_build_ex(const struct kh_entry *entries,
+                                 size_t n,
+                                 uint32_t flags,
+                                 struct kh_index **out);
 
 /*
  Frees an index and sets `*index` to null, so that freeing the same
@@ -285,8 +334,8 @@ enum kh_status kh_index_len(const struct kh_index *index, size_t *out);
  `cfg` may be null for the defaults. `*out` is fully overwritten (it is not
  read, so an uninitialised struct is fine, but a previous result in it is
  leaked unless freed first); on failure it is set to an empty result. On
- success release it with `kh_results_free`. ASCII letters of the query are
- lower-cased. An empty query is allowed. Embedded NUL bytes are ordinary
+ success release it with `kh_results_free`. The query is normalised like
+ the terms (`ACAO` finds `ação`). An empty query is allowed. Embedded NUL bytes are ordinary
  bytes. The pointer returned by `kh_last_error` is invalidated by the next
  call into the library, including `kh_index_free` and `kh_results_free`.
  Copying a `kh_results` and freeing both copies is a double free, like
@@ -294,9 +343,10 @@ enum kh_status kh_index_len(const struct kh_index *index, size_t *out);
 
  Fails with `KH_ERR_NULL_POINTER` (`index` or `out` null, or `query` null
  with a non-zero length), `KH_ERR_INVALID_UTF8`,
- `KH_ERR_QUERY_TOO_LONG` (`query_len` above `KH_MAX_QUERY_LEN`, checked
+ `KH_ERR_QUERY_TOO_LONG` (`query_len` above `KH_MAX_QUERY_BYTES`, checked
  before the buffer is read, so a huge length is reported this way and
- `KH_ERR_INVALID_LENGTH` is never returned by this function) or
+ `KH_ERR_INVALID_LENGTH` is never returned by this function; or more than
+ `KH_MAX_QUERY_LEN` code points after normalisation) or
  `KH_ERR_INVALID_ARGUMENT` (bad `cfg`, including `reserved != 0`).
 
  # Safety
