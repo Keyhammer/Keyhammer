@@ -45,6 +45,28 @@ use tables::{BASE, CASE_FOLD, FIRST, LAST};
 /// The Combining Diacritical Marks block, dropped by diacritic folding.
 const COMBINING: Range<u32> = 0x300..0x370;
 
+/// Version of the normalisation algorithm, recorded in serialized indexes
+/// (`docs/design/index-format.md`, section 7): an index built with another
+/// version refuses to load. Bump it with any change of [`Normalizer`] output.
+pub(crate) const ALGORITHM_VERSION: u16 = 1;
+
+/// Unicode version (major, minor, update) the tables in `text/tables.rs` were
+/// generated from; recorded in serialized indexes like [`ALGORITHM_VERSION`].
+pub(crate) const UNICODE_VERSION: [u8; 3] = [15, 0, 0];
+
+/// Whether `s` is its own normal form under `n`, checked without allocating.
+pub(crate) fn is_normalized(n: Normalizer, s: &str) -> bool {
+    let mut expect = s.chars();
+    let mut ok = true;
+    for c in s.chars() {
+        n.normalize_char(c, |o| ok &= expect.next() == Some(o));
+        if !ok {
+            return false;
+        }
+    }
+    expect.next().is_none()
+}
+
 /// The letters of a Latin ligature U+FB00 to U+FB06, or `None`.
 fn ligature(cp: u32) -> Option<&'static str> {
     Some(match cp {
@@ -389,6 +411,25 @@ mod tests {
     use super::*;
     use alloc::string::ToString;
     use alloc::vec;
+
+    #[test]
+    fn the_recorded_unicode_version_is_the_one_of_the_tables() {
+        let [a, b, c] = UNICODE_VERSION;
+        let header = alloc::format!("from Unicode {a}.{b}.{c} ");
+        assert!(include_str!("text/tables.rs").contains(&header));
+    }
+
+    #[test]
+    fn is_normalized_agrees_with_normalize() {
+        let samples = [
+            "abc", "Abc", "café", "cafe", "ß", "ss", "ﬁ", "i\u{307}", "\u{301}", "Ωmega", "a\u{0}",
+        ];
+        for n in MODES {
+            for s in samples {
+                assert_eq!(is_normalized(n, s), n.normalize(s) == s, "{s:?} {n:?}");
+            }
+        }
+    }
 
     const MODES: [Normalizer; 4] = [
         Normalizer::new(),

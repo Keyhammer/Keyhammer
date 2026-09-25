@@ -156,7 +156,8 @@ legacy one), so its numbers are not comparable with earlier runs of that script.
 
 - Improve ranking quality against the baseline.
 - Unicode folding beyond Latin-1 and Latin Extended-A, and in the bindings.
-- Index serialization.
+- Index serialization in the bindings (the core has it: `Trie::to_bytes`, `Index::from_bytes`,
+  see [`docs/design/index-format.md`](docs/design/index-format.md)); a compact profile.
 - More language bindings for the new engine (Node.js exists: `bindings/node`).
 
 ## Contributing

@@ -249,3 +249,38 @@ fn text_matches_the_oracle() {
 fn highlight_matches_the_hit_cost() {
     run(7, 3_000, structured_text, fuzz_props::highlight);
 }
+
+/// Input for `index_from_bytes`: a small dictionary, then 0 to 3 mutations
+/// (a third of the cases have none), CRC recomputed or not; one case in five
+/// is raw bytes (mode 0).
+fn structured_index(rng: &mut Rng) -> Vec<u8> {
+    let mut mode = rng.next() as u8;
+    if mode % 4 == 0 {
+        mode |= 1;
+    }
+    let qn = rng.below(6) as u8;
+    let mut d = vec![mode, rng.below(12) as u8, rng.below(65) as u8, qn];
+    d.extend((0..qn).map(|_| rng.below(16) as u8));
+    let mut dict = Vec::new();
+    for i in 0..1 + rng.below(8) {
+        if i > 0 {
+            dict.push(0xFF);
+        }
+        dict.push(rng.next() as u8);
+        dict.extend((0..1 + rng.below(6)).map(|_| rng.below(16) as u8));
+    }
+    dict.truncate(255);
+    d.push(dict.len() as u8);
+    d.extend(dict);
+    if rng.below(3) != 0 {
+        for _ in 0..1 + rng.below(3) {
+            d.extend([rng.next() as u8, rng.next() as u8, 1 << rng.below(8)]);
+        }
+    }
+    d
+}
+
+#[test]
+fn index_from_bytes_never_panics_and_accepts_only_consistent_indexes() {
+    run(7, 3_000, structured_index, fuzz_props::index_from_bytes);
+}

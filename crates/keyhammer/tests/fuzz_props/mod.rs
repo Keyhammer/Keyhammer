@@ -10,7 +10,8 @@
 
 use crate::support::{oracle_cost, oracle_topk};
 use keyhammer::cost::{CostModel, Layout};
-use keyhammer::search::{Ranking, SearchConfig, Searcher};
+use keyhammer::index::Index;
+use keyhammer::search::{Output, Ranking, SearchConfig, Searcher};
 use keyhammer::text::{self, Normalizer, SourceMap};
 use keyhammer::trie::Trie;
 
@@ -504,6 +505,167 @@ pub fn highlight(data: &[u8]) {
         if let Ok(h) = s.highlight(&trie, &cm, qraw, &hit, src, mode) {
             assert_eq!(h.cost, hit.cost);
             check_highlight(&h, src);
+        }
+    }
+}
+
+/// Bitwise reference CRC-32 (zlib), independent of the crate's table-driven
+/// one.
+pub fn crc32_reference(data: &[u8]) -> u32 {
+    let mut c = !0u32;
+    for &b in data {
+        c ^= u32::from(b);
+        for _ in 0..8 {
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
+        }
+    }
+    !c
+}
+
+/// Recomputes the CRC field (bytes 24..28) of an index, so that a mutation
+/// reaches the structural checks.
+pub fn fix_crc(bytes: &mut [u8]) {
+    if bytes.len() >= 28 {
+        bytes[24..28].fill(0);
+        let crc = crc32_reference(bytes);
+        bytes[24..28].copy_from_slice(&crc.to_le_bytes());
+    }
+}
+
+/// What an accepted index must satisfy (`docs/design/index-format.md`,
+/// sections 5.4 and 6): the view, the owned trie loaded from it and a trie
+/// rebuilt from its own terms, weights and normaliser give the same results
+/// for every query in `queries`, both modes, both rankings, `tsb` on and off,
+/// plain and text search; and loading then writing gives back `bytes`.
+pub fn check_accepted(bytes: &[u8], queries: &[&str], cm: &CostModel, k: usize, budget: u16) {
+    let ix = Index::from_bytes(bytes).expect("accepted");
+    let owned = ix.to_trie();
+    assert_eq!(
+        owned.to_bytes().unwrap(),
+        bytes,
+        "load then write is not the identity"
+    );
+    let items: Vec<(&str, u16)> = (0..ix.len() as u32)
+        .map(|id| (ix.term(id), ix.weight(id)))
+        .collect();
+    let rebuilt = match ix.normalizer() {
+        Some(n) => Trie::build_normalized(&items, &n),
+        None => Trie::build(&items),
+    }
+    .expect("the terms of an accepted index build");
+    assert_eq!(rebuilt.len(), ix.len());
+    assert_eq!(rebuilt.node_count(), ix.node_count());
+    let mut s = Searcher::new();
+    let key = |o: Output| (o.hits, o.stats);
+    for q in queries {
+        for ranking in [Ranking::Coarse, Ranking::Exact] {
+            for tsb in [false, true] {
+                let cfg = SearchConfig {
+                    k,
+                    budget,
+                    tsb,
+                    ranking,
+                    ..SearchConfig::default()
+                };
+                let b = q.as_bytes();
+                let want = key(s.search(&rebuilt, cm, b, &cfg).unwrap());
+                assert_eq!(
+                    key(ix.search(&mut s, cm, b, &cfg).unwrap()),
+                    want,
+                    "q={q:?}"
+                );
+                assert_eq!(key(s.search(&owned, cm, b, &cfg).unwrap()), want);
+                let want = key(s.search_prefix(&rebuilt, cm, b, &cfg).unwrap());
+                assert_eq!(key(ix.search_prefix(&mut s, cm, b, &cfg).unwrap()), want);
+                assert_eq!(key(s.search_prefix(&owned, cm, b, &cfg).unwrap()), want);
+                let want = key(s.search_text(&rebuilt, cm, q, &cfg).unwrap());
+                assert_eq!(key(ix.search_text(&mut s, cm, q, &cfg).unwrap()), want);
+                let want = key(s.search_prefix_text(&rebuilt, cm, q, &cfg).unwrap());
+                assert_eq!(
+                    key(ix.search_prefix_text(&mut s, cm, q, &cfg).unwrap()),
+                    want
+                );
+            }
+        }
+    }
+}
+
+/// Layout: `[mode, k, budget, qlen]`, `qlen % 17` query bytes (mapped onto
+/// [`TEXT_ALPHABET`]), then either
+///
+/// - `mode % 4 == 0`: the rest is fed to `Index::from_bytes` as it is; or
+/// - otherwise: a length byte `L`, `L` bytes of `[weight, term...]` chunks
+///   split at 0xFF (terms mapped onto [`TEXT_ALPHABET`], built plain or with
+///   one of the four normalisers), written with `to_bytes`; then the rest,
+///   read as `[pos lo, pos hi, xor]` triples, is XORed into the bytes, and with
+///   `mode & 2` the CRC is recomputed so that the structural checks are hit.
+///
+/// `from_bytes` must never panic; an accepted index must pass
+/// [`check_accepted`]. An unmutated index must be accepted.
+pub fn index_from_bytes(data: &[u8]) {
+    let mut c = Cursor(data);
+    let mode = c.u8();
+    let k = 1 + usize::from(c.u8() % 12);
+    let budget = u16::from(c.u8() % 65);
+    let qlen = (usize::from(c.u8()) % 17).min(c.0.len());
+    let (qraw, rest) = c.0.split_at(qlen);
+    let to_text = |b: &[u8]| -> String {
+        b.iter()
+            .map(|&x| TEXT_ALPHABET[usize::from(x % 16)])
+            .collect()
+    };
+    let q = to_text(qraw);
+    let cm = CostModel::for_layout(layout(mode));
+    if mode % 4 == 0 {
+        if Index::from_bytes(rest).is_ok() {
+            check_accepted(rest, &[q.as_str(), ""], &cm, k, budget);
+        }
+        return;
+    }
+    let mut c = Cursor(rest);
+    let len = usize::from(c.u8()).min(c.0.len());
+    let (dict, muts) = c.0.split_at(len);
+    let terms: Vec<(String, u16)> = dict
+        .split(|&b| b == 0xFF)
+        .take(16)
+        .filter_map(|chunk| {
+            let (&wb, t) = chunk.split_first()?;
+            let t = &t[..t.len().min(8)];
+            (!t.is_empty()).then(|| (to_text(t), u16::from(wb) * 257))
+        })
+        .collect();
+    let items: Vec<(&str, u16)> = terms.iter().map(|(t, w)| (t.as_str(), *w)).collect();
+    let built = if mode & 4 != 0 {
+        Trie::build(&items)
+    } else {
+        Trie::build_normalized(&items, &MODES[usize::from(mode >> 3) % MODES.len()])
+    };
+    let Ok(trie) = built else {
+        return;
+    };
+    let mut bytes = trie.to_bytes().unwrap();
+    assert!(
+        Index::from_bytes(&bytes).is_ok(),
+        "a written index must load"
+    );
+    let mut changed = false;
+    for m in muts.chunks_exact(3) {
+        let pos = usize::from(u16::from_le_bytes([m[0], m[1]])) % bytes.len();
+        bytes[pos] ^= m[2];
+        changed |= m[2] != 0;
+    }
+    if mode & 2 != 0 {
+        fix_crc(&mut bytes);
+    }
+    match Index::from_bytes(&bytes) {
+        Ok(_) => check_accepted(&bytes, &[q.as_str(), "", "a"], &cm, k, budget),
+        Err(e) => {
+            assert!(changed, "an unmutated index was rejected: {e}");
+            assert!(!e.to_string().is_empty());
         }
     }
 }

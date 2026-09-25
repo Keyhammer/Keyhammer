@@ -54,7 +54,7 @@ use core::ops::Range;
 use crate::cost::{Cost, CostModel, INF};
 use crate::search::{DELETE, Hit, INSERT, MAX_W, SUB, TRANSPOSE, moves};
 use crate::text::{Normalizer, SourceMap};
-use crate::trie::Trie;
+use crate::trie::Nodes;
 
 /// Which search produced the hit.
 #[non_exhaustive]
@@ -312,16 +312,16 @@ pub(crate) fn align(
 
 /// Highlights `hit` for the query symbols `q`; the entry point of
 /// `Searcher::highlight` and `Searcher::highlight_text`.
-pub(crate) fn run(
+pub(crate) fn run<T: Nodes + ?Sized>(
     s: &mut Scratch,
-    trie: &Trie,
+    trie: &T,
     cm: &CostModel,
     q: &[u32],
     hit: &Hit,
     source: &str,
     mode: HighlightMode,
 ) -> Result<Highlight, HighlightError> {
-    if hit.id as usize >= trie.len() {
+    if hit.id as usize >= trie.term_count() {
         return Err(HighlightError::UnknownTerm { id: hit.id });
     }
     // Without a normaliser the term is stored as given: the identity map.
@@ -418,6 +418,7 @@ mod tests {
     use super::*;
     use crate::cost::Layout;
     use crate::search::{SearchConfig, Searcher};
+    use crate::trie::Trie;
     use alloc::string::String;
     use alloc::vec;
 

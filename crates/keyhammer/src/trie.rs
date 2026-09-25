@@ -18,6 +18,7 @@ use core::fmt;
 use core::ops::Range;
 
 use crate::cost::symbol_class;
+use crate::index::FormatError;
 use crate::text::Normalizer;
 
 /// Value of [`Trie::term_id`] for nodes where no term ends.
@@ -522,6 +523,144 @@ impl Trie {
     /// ```
     pub fn below_mask(&self, v: usize) -> u64 {
         self.below_mask[v]
+    }
+
+    /// Writes the trie in the binary index format of
+    /// `docs/design/index-format.md` (version [`VERSION`](crate::index::VERSION)).
+    /// The bytes depend only on the trie's contents: the same trie gives the
+    /// same bytes on every platform. Load them with
+    /// [`Index::from_bytes`](crate::index::Index::from_bytes) (a validated,
+    /// borrowed view that can be searched) or [`Trie::from_bytes`].
+    ///
+    /// Returns [`FormatError::TooLarge`] if the trie exceeds the limits of the
+    /// format (in practice: more than 4 GiB of term text).
+    ///
+    /// ```
+    /// use keyhammer::trie::Trie;
+    /// let trie = Trie::build(&[("car", 9), ("cat", 4)]).unwrap();
+    /// let bytes = trie.to_bytes().unwrap();
+    /// let back = Trie::from_bytes(&bytes).unwrap();
+    /// assert_eq!(back.to_bytes().unwrap(), bytes);
+    /// assert_eq!(back.term(1), "cat");
+    /// ```
+    pub fn to_bytes(&self) -> Result<Vec<u8>, FormatError> {
+        crate::index::write(self)
+    }
+
+    /// Validates `bytes` (see [`Index::from_bytes`](crate::index::Index::from_bytes))
+    /// and builds an owned trie from them. The result equals the trie that was
+    /// written: same terms, ids, weights, input indices, normaliser and nodes.
+    ///
+    /// The file's weights, input indices and normaliser are the writer's
+    /// choice (`docs/design/index-format.md`, section 5.4): input indices may
+    /// be duplicated or out of range for your items (bounds-check before
+    /// indexing), and [`Trie::normalizer`] is the one recorded in the file.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Trie, FormatError> {
+        crate::index::Index::from_bytes(bytes).map(|ix| ix.to_trie())
+    }
+
+    /// Assembles a trie from arrays already validated by the index loader.
+    pub(crate) fn from_parts(p: Parts) -> Trie {
+        let label = if p.labels.iter().all(|&c| c <= 0xFF) {
+            Labels::Narrow(p.labels.into_iter().map(|c| c as u8).collect())
+        } else {
+            Labels::Wide(p.labels)
+        };
+        Trie {
+            terms: p.terms,
+            weights: p.weights,
+            input_index: p.input_index,
+            label,
+            child_start: p.child_start,
+            child_count: p.child_count,
+            term_id: p.term_id,
+            max_weight: p.max_weight,
+            len_min: p.len_min,
+            len_max: p.len_max,
+            below_mask: p.below_mask,
+            normalizer: p.normalizer,
+        }
+    }
+}
+
+/// The arrays of a [`Trie`], for [`Trie::from_parts`].
+pub(crate) struct Parts {
+    pub(crate) terms: Vec<String>,
+    pub(crate) weights: Vec<u16>,
+    pub(crate) input_index: Vec<u32>,
+    pub(crate) labels: Vec<u32>,
+    pub(crate) child_start: Vec<u32>,
+    pub(crate) child_count: Vec<u16>,
+    pub(crate) term_id: Vec<u32>,
+    pub(crate) max_weight: Vec<u16>,
+    pub(crate) len_min: Vec<u16>,
+    pub(crate) len_max: Vec<u16>,
+    pub(crate) below_mask: Vec<u64>,
+    pub(crate) normalizer: Option<Normalizer>,
+}
+
+/// Read access to the nodes of a trie: what the search needs. Implemented by
+/// [`Trie`] and by the borrowed [`Index`](crate::index::Index) view, so the
+/// search runs on either without copying; crate-private, so the public
+/// `Searcher` methods keep taking a `&Trie`.
+pub(crate) trait Nodes {
+    fn symbol(&self, v: usize) -> u32;
+    fn children(&self, v: usize) -> Range<usize>;
+    fn term_id(&self, v: usize) -> u32;
+    fn max_weight(&self, v: usize) -> u16;
+    fn len_min(&self, v: usize) -> u16;
+    fn len_max(&self, v: usize) -> u16;
+    fn below_mask(&self, v: usize) -> u64;
+    fn weight(&self, id: u32) -> u16;
+    fn normalizer(&self) -> Option<Normalizer>;
+    /// Number of terms.
+    fn term_count(&self) -> usize;
+    /// The text of term `id` (`""` for an unknown id).
+    fn term(&self, id: u32) -> &str;
+}
+
+impl Nodes for Trie {
+    #[inline]
+    fn symbol(&self, v: usize) -> u32 {
+        Trie::symbol(self, v)
+    }
+    #[inline]
+    fn children(&self, v: usize) -> Range<usize> {
+        Trie::children(self, v)
+    }
+    #[inline]
+    fn term_id(&self, v: usize) -> u32 {
+        Trie::term_id(self, v)
+    }
+    #[inline]
+    fn max_weight(&self, v: usize) -> u16 {
+        Trie::max_weight(self, v)
+    }
+    #[inline]
+    fn len_min(&self, v: usize) -> u16 {
+        Trie::len_min(self, v)
+    }
+    #[inline]
+    fn len_max(&self, v: usize) -> u16 {
+        Trie::len_max(self, v)
+    }
+    #[inline]
+    fn below_mask(&self, v: usize) -> u64 {
+        Trie::below_mask(self, v)
+    }
+    #[inline]
+    fn weight(&self, id: u32) -> u16 {
+        Trie::weight(self, id)
+    }
+    #[inline]
+    fn normalizer(&self) -> Option<Normalizer> {
+        Trie::normalizer(self)
+    }
+    fn term_count(&self) -> usize {
+        Trie::len(self)
+    }
+    fn term(&self, id: u32) -> &str {
+        Trie::term(self, id)
     }
 }
 
